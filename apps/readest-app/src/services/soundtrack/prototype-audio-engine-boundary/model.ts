@@ -2,7 +2,13 @@ export type Cue = {
   id: string;
   label: string;
   target:
-    | { kind: 'loop'; assetId: string; loopStartSec: number; loopEndSec: number }
+    | {
+        kind: 'loop';
+        assetId: string;
+        startSec: number;
+        loopStartSec: number;
+        loopEndSec: number;
+      }
     | { kind: 'silence' };
 };
 
@@ -15,6 +21,7 @@ export type PrototypeState = {
   audioUnlocked: boolean;
   soundtrackStarted: boolean;
   adapterCueId: string | null;
+  volume: number;
   lastAction: string;
   effects: readonly AdapterEffect[];
 };
@@ -27,6 +34,7 @@ export type PrototypeAction =
   | { type: 'reenter-cue' }
   | { type: 'tts-started' }
   | { type: 'tts-stopped' }
+  | { type: 'change-volume'; delta: number }
   | { type: 'close-and-reopen' };
 
 export type AdapterEffect =
@@ -35,6 +43,7 @@ export type AdapterEffect =
   | { type: 'transition-to'; cue: Cue; fadeMs: number; restart: true }
   | { type: 'pause' }
   | { type: 'resume' }
+  | { type: 'set-volume'; volume: number }
   | { type: 'stop' }
   | { type: 'dispose' };
 
@@ -42,12 +51,24 @@ export const CUES: readonly Cue[] = [
   {
     id: 'arrival',
     label: 'Arrival at Blackwood',
-    target: { kind: 'loop', assetId: 'rain.mp3', loopStartSec: 4.2, loopEndSec: 52.8 },
+    target: {
+      kind: 'loop',
+      assetId: 'rain.mp3',
+      startSec: 0.8,
+      loopStartSec: 4.2,
+      loopEndSec: 52.8,
+    },
   },
   {
     id: 'library',
     label: 'The sealed library',
-    target: { kind: 'loop', assetId: 'library.mp3', loopStartSec: 2, loopEndSec: 44.5 },
+    target: {
+      kind: 'loop',
+      assetId: 'library.mp3',
+      startSec: 2,
+      loopStartSec: 2,
+      loopEndSec: 44.5,
+    },
   },
   { id: 'letter', label: 'The letter', target: { kind: 'silence' } },
 ];
@@ -59,6 +80,7 @@ export const initialState = (cueIndex = 0): PrototypeState => ({
   audioUnlocked: false,
   soundtrackStarted: false,
   adapterCueId: null,
+  volume: 0.7,
   lastAction: 'book opened; containing cue selected',
   effects: [],
 });
@@ -147,10 +169,20 @@ export const reducePrototype = (
         effects: [],
         lastAction: 'TTS stopped; soundtrack does not resume unexpectedly',
       };
+    case 'change-volume': {
+      const volume = Math.min(1, Math.max(0, Math.round((state.volume + action.delta) * 10) / 10));
+      return {
+        ...state,
+        volume,
+        effects: [{ type: 'set-volume', volume }],
+        lastAction: `master volume changed to ${Math.round(volume * 100)}%`,
+      };
+    }
     case 'close-and-reopen': {
       const reopened = initialState(state.cueIndex);
       return {
         ...reopened,
+        volume: state.volume,
         effects: [{ type: 'stop' }, { type: 'dispose' }],
         lastAction: 'book closed and reopened at the saved reading position',
       };

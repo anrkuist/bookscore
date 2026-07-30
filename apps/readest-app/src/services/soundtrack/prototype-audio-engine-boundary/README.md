@@ -16,7 +16,13 @@ This is deliberately throwaway. It emits the operations a runtime adapter would 
 
 ```ts
 type PlaybackTarget =
-  | { kind: 'loop'; assetId: string; loopStartSec: number; loopEndSec: number }
+  | {
+      kind: 'loop';
+      assetId: string;
+      startSec: number;
+      loopStartSec: number;
+      loopEndSec: number;
+    }
   | { kind: 'silence' };
 
 interface SoundtrackAudioAdapter {
@@ -24,6 +30,7 @@ interface SoundtrackAudioAdapter {
   transitionTo(target: PlaybackTarget, options: { fadeMs: number; restart: true }): Promise<void>;
   pause(): Promise<void>;
   resume(): Promise<void>;
+  setVolume(volume: number): void;
   stop(): Promise<void>;
   dispose(): Promise<void>;
 }
