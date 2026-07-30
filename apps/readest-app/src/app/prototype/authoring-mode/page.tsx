@@ -142,7 +142,7 @@ export default function AuthoringModePrototypePage() {
                 </Button>
                 <CueList cues={cues} selectedCueId={selectedCueId} onSelect={setSelectedCueId} />
                 <div className='flex flex-wrap gap-2'>
-                  <Button onClick={() => setIsAuthoring(true)}>Edit a copy</Button>
+                  <Button onClick={() => setIsAuthoring(true)}>Make editable copy</Button>
                   <Button>Import</Button>
                 </div>
               </div>
