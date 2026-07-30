@@ -2,8 +2,6 @@
 
 import { useState } from 'react';
 
-type Cue = 'audible' | 'silence';
-
 const Button = ({
   children,
   onClick,
@@ -31,10 +29,7 @@ export default function SoundtrackPlaybackPrototypePage() {
   const [hasPlayed, setHasPlayed] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isTtsActive, setIsTtsActive] = useState(false);
-  const [cue, setCue] = useState<Cue>('audible');
-  const [soundtrack, setSoundtrack] = useState('Moonlit Road');
   const [volume, setVolume] = useState(70);
-  const [isUnverified, setIsUnverified] = useState(false);
   const [status, setStatus] = useState('Reopened paused at Chapter 4.');
 
   const togglePlayback = () => {
@@ -53,13 +48,6 @@ export default function SoundtrackPlaybackPrototypePage() {
       nextTtsActive
         ? 'Soundtrack paused for text-to-speech.'
         : 'Text-to-speech stopped; soundtrack remains paused.',
-    );
-  };
-
-  const selectCue = (nextCue: Cue) => {
-    setCue(nextCue);
-    setStatus(
-      nextCue === 'silence' ? 'Moved to an intentional-silence cue.' : 'Moved to an audible scene.',
     );
   };
 
@@ -124,9 +112,6 @@ export default function SoundtrackPlaybackPrototypePage() {
                       SOUNDTRACK
                     </p>
                     <h2 className='mt-1 font-semibold'>Soundtrack</h2>
-                    {isUnverified && (
-                      <p className='text-sm text-base-content/65'>Unverified association</p>
-                    )}
                   </div>
                   <button
                     className='rounded-full px-2 py-1 hover:bg-base-300'
@@ -150,14 +135,8 @@ export default function SoundtrackPlaybackPrototypePage() {
                 )}
                 <div>
                   <p className='text-sm text-base-content/65'>Now playing</p>
-                  <p className='mt-1 font-medium'>
-                    {cue === 'silence' ? 'Quiet scene' : 'Rain at Dusk'}
-                  </p>
-                  <p className='text-sm text-base-content/65'>
-                    {cue === 'silence'
-                      ? 'Playback is armed for the next audible scene.'
-                      : 'Scene 4 · 18%'}
-                  </p>
+                  <p className='mt-1 font-medium'>Rain at Dusk</p>
+                  <p className='text-sm text-base-content/65'>Scene 4 · 18%</p>
                 </div>
                 <Button primary onClick={togglePlayback}>
                   {isPlaying ? '❚❚ Pause' : '▶ Play soundtrack'}
@@ -171,34 +150,6 @@ export default function SoundtrackPlaybackPrototypePage() {
                     onChange={(event) => setVolume(Number(event.target.value))}
                   />
                 </label>
-                <label className='block text-sm'>
-                  Soundtrack
-                  <select
-                    className='mt-1 w-full rounded-lg border border-base-300 bg-base-100 px-3 py-2'
-                    value={soundtrack}
-                    onChange={(event) => {
-                      setSoundtrack(event.target.value);
-                      setStatus(`Selected ${event.target.value}.`);
-                    }}
-                  >
-                    <option>Moonlit Road</option>
-                    <option>Midnight in the Garden</option>
-                  </select>
-                </label>
-                <div className='grid grid-cols-2 gap-2'>
-                  <Button onClick={() => selectCue('audible')}>Audible scene</Button>
-                  <Button onClick={() => selectCue('silence')}>Quiet scene</Button>
-                </div>
-                <Button onClick={() => setIsUnverified((value) => !value)}>
-                  {isUnverified ? 'Clear Unverified demo' : 'Demo mismatch warning'}
-                </Button>
-                <Button
-                  onClick={() =>
-                    setStatus('Manage import and attachment in Library → book details.')
-                  }
-                >
-                  Manage in Library
-                </Button>
                 <p className='rounded-lg border border-base-300 bg-base-100 p-3 text-sm'>
                   {status}
                 </p>
