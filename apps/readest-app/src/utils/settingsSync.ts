@@ -154,9 +154,14 @@ export const subscribeSettingsSync = async (
   onReceive: (payload: SettingsSyncPayload) => void,
 ): Promise<UnlistenFn> => {
   if (!isTauriAppPlatform()) return () => {};
-  const currentLabel = getCurrentWindow().label;
-  return listen<SettingsSyncPayload>(SETTINGS_SYNC_EVENT, ({ payload }) => {
-    if (!payload || payload.sourceLabel === currentLabel) return;
-    onReceive(payload);
-  });
+  try {
+    const currentLabel = getCurrentWindow().label;
+    return await listen<SettingsSyncPayload>(SETTINGS_SYNC_EVENT, ({ payload }) => {
+      if (!payload || payload.sourceLabel === currentLabel) return;
+      onReceive(payload);
+    });
+  } catch {
+    // The Tauri build can run through a regular browser during local preview.
+    return () => {};
+  }
 };
