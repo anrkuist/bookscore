@@ -60,7 +60,13 @@ async function resolveAndPlayAudioCue(
   const fs = customFs ?? (appSvc as unknown as FileSystem | undefined);
   let audioData: ArrayBuffer | null = null;
   if (fs) {
-    audioData = await loadSoundtrackAssetFile(fs, 'Data', pkg.packageId, asset.id);
+    audioData = await loadSoundtrackAssetFile(
+      fs,
+      'Data',
+      pkg.packageId,
+      asset.id,
+      pkg.manifestHash,
+    );
   }
 
   try {

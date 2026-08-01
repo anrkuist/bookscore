@@ -61,7 +61,7 @@ export async function defaultAudioDecoder(
     return { durationSec: Math.round(durationSec * 10) / 10 };
   }
 
-  return { durationSec: 60 };
+  throw new Error('Invalid or undecodable MP3 audio bytes');
 }
 
 export async function sha256Hex(buffer: ArrayBuffer | Uint8Array): Promise<string> {
@@ -79,6 +79,9 @@ export function validateAsset(asset: unknown): { valid: boolean; error?: string 
   if (!a.id || typeof a.id !== 'string') return { valid: false, error: 'Asset missing id' };
   if (!a.path || typeof a.path !== 'string')
     return { valid: false, error: `Asset ${a.id} missing path` };
+  if (a.path.includes('..') || a.path.startsWith('/') || a.path.includes('\\')) {
+    return { valid: false, error: `Asset ${a.id} path is unsafe: ${a.path}` };
+  }
   if (a.mimeType !== 'audio/mpeg')
     return { valid: false, error: `Asset ${a.id} mimeType must be audio/mpeg` };
   if (!a.hash || typeof a.hash !== 'string')
@@ -192,11 +195,16 @@ export function validatePackageManifest(manifestRaw: unknown): ValidationResult 
         errors.push(res.error);
       } else {
         const asset = assetRaw as SoundtrackAsset;
-        assetsMap.set(asset.id, asset);
+        if (assetsMap.has(asset.id)) {
+          errors.push(`Duplicate asset ID ${asset.id} in manifest`);
+        } else {
+          assetsMap.set(asset.id, asset);
+        }
       }
     }
   }
 
+  const cueIds = new Set<string>();
   if (!Array.isArray(manifest.cues) || manifest.cues.length === 0) {
     errors.push('cues must be a non-empty array');
   } else {
@@ -204,6 +212,18 @@ export function validatePackageManifest(manifestRaw: unknown): ValidationResult 
       const res = validateCue(cueRaw, assetsMap);
       if (!res.valid && res.error) {
         errors.push(res.error);
+      } else if (
+        cueRaw &&
+        typeof cueRaw === 'object' &&
+        'id' in cueRaw &&
+        typeof (cueRaw as { id: unknown }).id === 'string'
+      ) {
+        const cueId = (cueRaw as { id: string }).id;
+        if (cueIds.has(cueId)) {
+          errors.push(`Duplicate cue ID ${cueId} in manifest`);
+        } else {
+          cueIds.add(cueId);
+        }
       }
     }
   }

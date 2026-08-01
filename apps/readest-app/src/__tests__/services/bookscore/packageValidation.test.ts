@@ -91,8 +91,9 @@ describe('packageValidation', () => {
     const { ZipWriter, Uint8ArrayWriter, Uint8ArrayReader, TextReader } = await import(
       '@zip.js/zip.js'
     );
+    const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
 
-    const assetBytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    const assetBytes = createMinimalValidMp3Bytes();
     const assetHash = await sha256Hex(assetBytes);
 
     const manifestObj = {
@@ -113,7 +114,7 @@ describe('packageValidation', () => {
           path: 'audio/track1.mp3',
           mimeType: 'audio/mpeg',
           hash: assetHash,
-          durationSec: 60,
+          durationSec: 2.6,
         },
       ],
       cues: [
@@ -124,7 +125,7 @@ describe('packageValidation', () => {
           assetId: 'track-1',
           startSec: 0,
           loopStartSec: 0,
-          loopEndSec: 20,
+          loopEndSec: 2.0,
           volume: 1,
           crossfadeSec: 0.5,
         },
@@ -335,5 +336,41 @@ describe('packageValidation', () => {
     const res = await validateBookScorePackageArchive(zipArchiveBytes, shortAudioDecoder);
     expect(res.valid).toBe(false);
     expect(res.errors.some((e) => e.includes('does not match declared asset duration'))).toBe(true);
+  });
+
+  it('rejects manifest with duplicate asset IDs', () => {
+    const invalid = {
+      ...validManifest,
+      assets: [validManifest.assets[0], validManifest.assets[0]],
+    };
+    const result = validatePackageManifest(invalid);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('Duplicate asset ID'))).toBe(true);
+  });
+
+  it('rejects manifest with duplicate cue IDs', () => {
+    const invalid = {
+      ...validManifest,
+      cues: [validManifest.cues[0], validManifest.cues[0]],
+    };
+    const result = validatePackageManifest(invalid);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('Duplicate cue ID'))).toBe(true);
+  });
+
+  it('rejects asset with unsafe path traversal in manifest', () => {
+    const invalid = {
+      ...validManifest,
+      assets: [{ ...validManifest.assets[0], path: '../unsafe.mp3' }],
+    };
+    const result = validatePackageManifest(invalid);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('path is unsafe'))).toBe(true);
+  });
+
+  it('defaultAudioDecoder rejects corrupt non-MP3 audio bytes', async () => {
+    const { defaultAudioDecoder } = await import('@/services/bookscore/packageValidation');
+    const corruptBytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef, 0x12, 0x34]);
+    await expect(defaultAudioDecoder(corruptBytes)).rejects.toThrow('Invalid or undecodable MP3');
   });
 });

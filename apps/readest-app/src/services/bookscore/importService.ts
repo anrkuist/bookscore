@@ -64,29 +64,77 @@ export async function importAndAssociateBookScorePackage(
   const initialAssociations = await loadLocalAssociations(fs, baseDir);
 
   try {
-    // 1. Persist extracted asset audio files to app storage
+    const existingPackage = initialPackages[pkgKey];
+    const isAlreadyInstalled = Boolean(existingPackage);
+    // Retain immutable stored package record if already installed
+    const pkgToUse = existingPackage ?? pkg;
+
+    // 1. Persist extracted asset audio files to app storage (namespaced by manifestHash)
+    const { loadSoundtrackAssetFile } = await import('./assetStorage');
+
     for (const [assetId, bytes] of valRes.assetFiles.entries()) {
-      const savedPath = await saveSoundtrackAssetFile(fs, baseDir, pkg.packageId, assetId, bytes);
+      if (isAlreadyInstalled) {
+        const existingData = await loadSoundtrackAssetFile(
+          fs,
+          baseDir,
+          pkg.packageId,
+          assetId,
+          pkg.manifestHash,
+        );
+        if (existingData) {
+          // Asset already exists on disk for this revision, skip re-writing
+          continue;
+        }
+      }
+      const savedPath = await saveSoundtrackAssetFile(
+        fs,
+        baseDir,
+        pkg.packageId,
+        assetId,
+        bytes,
+        pkg.manifestHash,
+      );
       writtenAssetPaths.push(savedPath);
     }
 
-    // 2. Save InstalledPackage to soundtrack_packages.json
-    const updatedPackages = { ...initialPackages, [pkgKey]: pkg };
-    await saveInstalledPackages(fs, baseDir, updatedPackages);
+    // 2. Save InstalledPackage to soundtrack_packages.json ONLY if new
+    let updatedPackages = initialPackages;
+    if (!isAlreadyInstalled) {
+      updatedPackages = { ...initialPackages, [pkgKey]: pkgToUse };
+      await saveInstalledPackages(fs, baseDir, updatedPackages);
+    }
 
-    // 3. Create & save LocalAssociation attaching Package Revision to EPUB edition
+    // 3. Create & save LocalAssociation attaching Package Revision to EPUB edition.
+    // Retain existing revision associations unchanged so multiple revisions coexist without mutating prior state.
+    const revisionAssocKey = `${editionId}:${pkg.packageId}:${pkg.manifestHash}`;
+    const existingRevisionAssoc = initialAssociations[revisionAssocKey];
+    const existingEditionAssoc = initialAssociations[editionId];
+    const matchingAssoc =
+      (existingEditionAssoc &&
+      existingEditionAssoc.packageId === pkg.packageId &&
+      existingEditionAssoc.manifestHash === pkg.manifestHash
+        ? existingEditionAssoc
+        : undefined) ?? existingRevisionAssoc;
+
+    const targetSelected = matchingAssoc ? matchingAssoc.selected : true;
+
     const association: LocalAssociation = {
       editionId,
       packageId: pkg.packageId,
       manifestHash: pkg.manifestHash,
-      selected: true,
+      selected: targetSelected,
     };
-    const updatedAssociations = { ...initialAssociations, [editionId]: association };
+
+    const updatedAssociations = {
+      ...initialAssociations,
+      [revisionAssocKey]: association,
+      [editionId]: association,
+    };
     await saveLocalAssociations(fs, baseDir, updatedAssociations);
 
     return {
       success: true,
-      package: pkg,
+      package: pkgToUse,
       association,
     };
   } catch (err) {
