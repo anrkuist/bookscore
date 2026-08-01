@@ -1990,5 +1990,16 @@
   "{{count}} chapters_two": "{{count}} פרקים",
   "{{count}} chapters_other": "{{count}} פרקים",
   "Downloading chapters…": "מוריד פרקים…",
-  "This chapter could not be downloaded.": "לא ניתן היה להוריד את הפרק הזה."
+  "This chapter could not be downloaded.": "לא ניתן היה להוריד את הפרק הזה.",
+  "Cue": "__STRING_NOT_TRANSLATED__",
+  "Silence": "__STRING_NOT_TRANSLATED__",
+  "No Cue": "__STRING_NOT_TRANSLATED__",
+  "Soundtrack Playing": "__STRING_NOT_TRANSLATED__",
+  "Click to enable Soundtrack Audio": "__STRING_NOT_TRANSLATED__",
+  "Soundtrack Paused": "__STRING_NOT_TRANSLATED__",
+  "Pause soundtrack": "__STRING_NOT_TRANSLATED__",
+  "Play soundtrack": "__STRING_NOT_TRANSLATED__",
+  "Playing": "__STRING_NOT_TRANSLATED__",
+  "Click Play": "__STRING_NOT_TRANSLATED__",
+  "Paused": "__STRING_NOT_TRANSLATED__"
 }

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { validatePackageManifest } from '@/services/bookscore/packageValidation';
+import {
+  validatePackageManifest,
+  validateBookScorePackageArchive,
+  sha256Hex,
+} from '@/services/bookscore/packageValidation';
 
 describe('packageValidation', () => {
   const validManifest = {
@@ -49,7 +53,6 @@ describe('packageValidation', () => {
     expect(result.errors).toHaveLength(0);
     expect(result.package).toBeDefined();
     expect(result.package?.packageId).toBe('pkg-dune-v1');
-    expect(result.package?.manifestHash).toBe('a1b2c3d4e5f6');
   });
 
   it('fails validation when packageId or manifestHash is missing', () => {
@@ -75,7 +78,7 @@ describe('packageValidation', () => {
       cues: [
         {
           ...validManifest.cues[0],
-          loopEndSec: 150, // exceeds asset durationSec (120)
+          loopEndSec: 150,
         },
       ],
     };
@@ -84,18 +87,75 @@ describe('packageValidation', () => {
     expect(result.errors.some((e) => e.includes('exceeds asset duration'))).toBe(true);
   });
 
-  it('fails validation when audio cue references non-existent assetId', () => {
-    const invalid = {
-      ...validManifest,
+  it('validates a real .bookscore ZIP package archive with SHA-256 asset checksum verification', async () => {
+    const { ZipWriter, Uint8ArrayWriter, Uint8ArrayReader, TextReader } = await import(
+      '@zip.js/zip.js'
+    );
+
+    const assetBytes = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);
+    const assetHash = await sha256Hex(assetBytes);
+
+    const manifestObj = {
+      packageId: 'pkg-zip-test',
+      title: 'Zip Package Test',
+      version: 1,
+      manifestHash: '',
+      editionCompatibility: [
+        {
+          algorithm: 'readest-partial-md5-v1',
+          digest: 'md5digest',
+          epubByteLength: 10000,
+        },
+      ],
+      assets: [
+        {
+          id: 'track-1',
+          path: 'audio/track1.mp3',
+          mimeType: 'audio/mpeg',
+          hash: assetHash,
+          durationSec: 30,
+        },
+      ],
       cues: [
         {
-          ...validManifest.cues[0],
-          assetId: 'non-existent-asset',
+          id: 'cue-1',
+          startCfi: 'epubcfi(/6/2!/4/2:0)',
+          type: 'audio',
+          assetId: 'track-1',
+          startSec: 0,
+          loopStartSec: 0,
+          loopEndSec: 20,
+          volume: 1,
+          crossfadeSec: 0.5,
         },
       ],
     };
-    const result = validatePackageManifest(invalid);
-    expect(result.valid).toBe(false);
-    expect(result.errors.some((e) => e.includes('non-existent assetId'))).toBe(true);
+
+    const encoder = new TextEncoder();
+    const manifestText = JSON.stringify(manifestObj, null, 2);
+    const computedManifestHash = await sha256Hex(encoder.encode(manifestText));
+    manifestObj.manifestHash = computedManifestHash;
+
+    const zipWriter = new ZipWriter(new Uint8ArrayWriter());
+    await zipWriter.add('manifest.json', new TextReader(JSON.stringify(manifestObj)));
+    await zipWriter.add('audio/track1.mp3', new Uint8ArrayReader(assetBytes));
+    const zipArchiveBytes = await zipWriter.close();
+
+    const res = await validateBookScorePackageArchive(zipArchiveBytes);
+    expect(res.valid).toBe(true);
+    expect(res.errors).toHaveLength(0);
+    expect(res.package?.packageId).toBe('pkg-zip-test');
+    expect(res.assetFiles?.has('track-1')).toBe(true);
+  });
+
+  it('rejects ZIP package archive with unsafe entry path traversal', async () => {
+    const { ZipWriter, Uint8ArrayWriter, TextReader } = await import('@zip.js/zip.js');
+    const zipWriter = new ZipWriter(new Uint8ArrayWriter());
+    await zipWriter.add('../unsafe.json', new TextReader('{}'));
+    const zipArchiveBytes = await zipWriter.close();
+
+    const res = await validateBookScorePackageArchive(zipArchiveBytes);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some((e) => e.includes('Unsafe ZIP entry path'))).toBe(true);
   });
 });

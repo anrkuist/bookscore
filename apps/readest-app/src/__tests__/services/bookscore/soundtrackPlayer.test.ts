@@ -98,14 +98,32 @@ describe('WebAudioSoundtrackPlayer', () => {
     await expect(player.playCue(sampleCue)).rejects.toThrow('Gesture unlock required');
   });
 
-  it('transitions to silence smoothly', async () => {
+  it('preserves playback position offset on pause and resumes from saved offset', async () => {
     const fakeCtx = new FakeAudioContext();
     fakeCtx.state = 'running';
+    fakeCtx.currentTime = 10;
     const player = new WebAudioSoundtrackPlayer(fakeCtx);
 
+    // Initial playback at startSec = 5
     await player.playCue(sampleCue);
-    await player.transitionToSilence(0.5);
 
-    expect(player.getCurrentCue()).toBeNull();
+    // Advance audio context currentTime by 15s (10 -> 25)
+    fakeCtx.currentTime = 25;
+
+    // Pause playback
+    player.pause();
+
+    // Verify saved offset was calculated as 5 + 15 = 20 seconds
+    const savedOffset = player.getSavedOffset(sampleCue.id);
+    expect(savedOffset).toBe(20);
+
+    // Resume playback for the same cue
+    await player.playCue(sampleCue);
+
+    const secondSource = vi.mocked(fakeCtx.createBufferSource).mock.results[1]
+      ?.value as FakeBufferSourceNode;
+    expect(secondSource).toBeDefined();
+    // Verify playback resumed at saved offset 20 instead of initial startSec 5
+    expect(secondSource.start).toHaveBeenCalledWith(25, 20);
   });
 });

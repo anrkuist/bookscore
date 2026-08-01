@@ -11,6 +11,17 @@ export type ValidationResult = {
   package?: InstalledPackage;
 };
 
+export type ArchiveValidationResult = ValidationResult & {
+  assetFiles?: Map<string, Uint8Array>;
+};
+
+export async function sha256Hex(buffer: ArrayBuffer | Uint8Array): Promise<string> {
+  const view = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', view.buffer as ArrayBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 export function validateAsset(asset: unknown): { valid: boolean; error?: string } {
   if (!asset || typeof asset !== 'object') {
     return { valid: false, error: 'Asset must be an object' };
@@ -166,4 +177,116 @@ export function validatePackageManifest(manifestRaw: unknown): ValidationResult 
     errors: [],
     package: installedPkg,
   };
+}
+
+type EntryWithGetData = {
+  filename: string;
+  directory?: boolean;
+  getData: (writer: unknown) => Promise<unknown>;
+};
+
+/**
+ * Validates a .bookscore ZIP archive by inspecting archive entries,
+ * enforcing path safety, verifying manifest syntax/semantics, asset file presence,
+ * and checking SHA-256 checksums of declared assets.
+ */
+export async function validateBookScorePackageArchive(
+  archiveBytes: Uint8Array,
+): Promise<ArchiveValidationResult> {
+  const errors: string[] = [];
+  try {
+    const { ZipReader, Uint8ArrayReader, TextWriter, Uint8ArrayWriter } = await import(
+      '@zip.js/zip.js'
+    );
+    const reader = new ZipReader(new Uint8ArrayReader(archiveBytes));
+    const entries = (await reader.getEntries()) as unknown as EntryWithGetData[];
+
+    // Check path safety across all entries
+    for (const entry of entries) {
+      const path = entry.filename;
+      if (path.includes('..') || path.startsWith('/') || path.includes('\\')) {
+        await reader.close();
+        return { valid: false, errors: [`Unsafe ZIP entry path: ${path}`] };
+      }
+    }
+
+    const manifestEntry = entries.find(
+      (e) =>
+        (e.filename === 'manifest.json' || e.filename.endsWith('/manifest.json')) &&
+        typeof e.getData === 'function',
+    );
+    if (!manifestEntry) {
+      await reader.close();
+      return { valid: false, errors: ['manifest.json missing from package archive'] };
+    }
+
+    const manifestWriter = new TextWriter();
+    const manifestText = (await manifestEntry.getData(manifestWriter)) as string;
+    const encoder = new TextEncoder();
+    const manifestBytes = encoder.encode(manifestText);
+    const computedManifestHash = await sha256Hex(manifestBytes);
+
+    let manifestRaw: Partial<SoundtrackPackageManifest>;
+    try {
+      manifestRaw = JSON.parse(manifestText);
+    } catch (parseError) {
+      await reader.close();
+      return { valid: false, errors: [`Invalid manifest JSON: ${parseError}`] };
+    }
+
+    if (!manifestRaw.manifestHash) {
+      manifestRaw.manifestHash = computedManifestHash;
+    }
+
+    const manifestValidation = validatePackageManifest(manifestRaw);
+    if (!manifestValidation.valid || !manifestValidation.package) {
+      await reader.close();
+      return manifestValidation;
+    }
+
+    const validManifest = manifestValidation.package.manifest;
+    const extractedAssetFiles = new Map<string, Uint8Array>();
+
+    for (const asset of validManifest.assets) {
+      const assetEntry = entries.find(
+        (e) =>
+          (e.filename === asset.path ||
+            e.filename.endsWith(`/${asset.path}`) ||
+            e.filename === `audio/${asset.id}.mp3`) &&
+          typeof e.getData === 'function',
+      );
+      if (!assetEntry) {
+        errors.push(`Asset ${asset.id} file ${asset.path} missing from package archive`);
+        continue;
+      }
+
+      const assetWriter = new Uint8ArrayWriter();
+      const assetBytes = (await assetEntry.getData(assetWriter)) as Uint8Array;
+      const computedAssetHash = await sha256Hex(assetBytes);
+
+      if (computedAssetHash.toLowerCase() !== asset.hash.toLowerCase()) {
+        errors.push(
+          `Asset ${asset.id} SHA-256 hash mismatch (expected ${asset.hash}, got ${computedAssetHash})`,
+        );
+        continue;
+      }
+
+      extractedAssetFiles.set(asset.id, assetBytes);
+    }
+
+    await reader.close();
+
+    if (errors.length > 0) {
+      return { valid: false, errors };
+    }
+
+    return {
+      valid: true,
+      errors: [],
+      package: manifestValidation.package,
+      assetFiles: extractedAssetFiles,
+    };
+  } catch (err) {
+    return { valid: false, errors: [`Failed to read package archive: ${err}`] };
+  }
 }

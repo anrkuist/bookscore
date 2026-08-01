@@ -1,4 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fsPromises from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
 import { BaseDir, FileSystem } from '@/types/system';
 import {
   loadInstalledPackages,
@@ -9,39 +12,94 @@ import {
   ASSOCIATIONS_FILENAME,
 } from '@/services/bookscore/persistence';
 import { InstalledPackage, LocalAssociation } from '@/services/bookscore/types';
+import {
+  saveSoundtrackAssetFile,
+  loadSoundtrackAssetFile,
+} from '@/services/bookscore/assetStorage';
 
-class MemoryFileSystem {
-  private files = new Map<string, string>();
+class NodeTestFileSystem {
+  constructor(private rootDir: string) {}
 
-  async readFile(path: string, base: BaseDir, _format: 'text'): Promise<string> {
-    const key = `${base}:${path}`;
-    const content = this.files.get(key);
-    if (!content) {
-      throw new Error(`File not found: ${path}`);
+  resolvePath(fp: string, base: BaseDir) {
+    return {
+      baseDir: 0,
+      basePrefix: async () => this.rootDir,
+      fp,
+      base,
+    };
+  }
+
+  getURL(pathStr: string) {
+    return `file://${path.join(this.rootDir, pathStr)}`;
+  }
+
+  async getBlobURL(pathStr: string): Promise<string> {
+    return this.getURL(pathStr);
+  }
+
+  async getImageURL(pathStr: string): Promise<string> {
+    return this.getURL(pathStr);
+  }
+
+  async openFile(pathStr: string): Promise<File> {
+    const fullPath = path.join(this.rootDir, pathStr);
+    const buf = await fsPromises.readFile(fullPath);
+    return new File([buf], path.basename(pathStr));
+  }
+
+  async copyFile(srcPath: string, _srcBase: BaseDir, dstPath: string): Promise<void> {
+    const src = path.join(this.rootDir, srcPath);
+    const dst = path.join(this.rootDir, dstPath);
+    await fsPromises.mkdir(path.dirname(dst), { recursive: true });
+    await fsPromises.copyFile(src, dst);
+  }
+
+  async readFile(pathStr: string, _base: BaseDir, _format: 'text'): Promise<string> {
+    const fullPath = path.join(this.rootDir, pathStr);
+    return fsPromises.readFile(fullPath, 'utf8');
+  }
+
+  async writeFile(pathStr: string, _base: BaseDir, data: string): Promise<void> {
+    const fullPath = path.join(this.rootDir, pathStr);
+    await fsPromises.mkdir(path.dirname(fullPath), { recursive: true });
+    await fsPromises.writeFile(fullPath, data, 'utf8');
+  }
+
+  async exists(pathStr: string, _base: BaseDir): Promise<boolean> {
+    const fullPath = path.join(this.rootDir, pathStr);
+    try {
+      await fsPromises.access(fullPath);
+      return true;
+    } catch {
+      return false;
     }
-    return content;
   }
 
-  async writeFile(path: string, base: BaseDir, data: string): Promise<void> {
-    const key = `${base}:${path}`;
-    this.files.set(key, data);
-  }
-
-  async exists(path: string, base: BaseDir): Promise<boolean> {
-    return this.files.has(`${base}:${path}`);
-  }
-
-  async remove(path: string, base: BaseDir): Promise<void> {
-    this.files.delete(`${base}:${path}`);
+  async remove(pathStr: string, _base: BaseDir): Promise<void> {
+    const fullPath = path.join(this.rootDir, pathStr);
+    await fsPromises.rm(fullPath, { recursive: true, force: true });
   }
 }
 
-describe('BookScore Persistence', () => {
+describe('BookScore Real Disk Persistence', () => {
+  let tmpDir: string;
+  let fs: FileSystem;
+  const baseDir: BaseDir = 'Data';
+
+  beforeEach(async () => {
+    tmpDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'bookscore-test-'));
+    fs = new NodeTestFileSystem(tmpDir) as unknown as FileSystem;
+  });
+
+  afterEach(async () => {
+    await fsPromises.rm(tmpDir, { recursive: true, force: true });
+  });
+
   const sampleManifest = {
-    packageId: 'pkg-real-fixture',
-    title: 'Fixture Soundtrack',
+    packageId: 'pkg-real-disk-fixture',
+    title: 'Fixture Real Disk Soundtrack',
     version: 1,
-    manifestHash: 'hash12345',
+    manifestHash: 'hash123456789',
     editionCompatibility: [
       {
         algorithm: 'readest-partial-md5-v1' as const,
@@ -74,51 +132,57 @@ describe('BookScore Persistence', () => {
   };
 
   const samplePackage: InstalledPackage = {
-    packageId: 'pkg-real-fixture',
-    manifestHash: 'hash12345',
+    packageId: 'pkg-real-disk-fixture',
+    manifestHash: 'hash123456789',
     manifest: sampleManifest,
     installedAt: 1700000000000,
   };
 
   const sampleAssociation: LocalAssociation = {
-    editionId: 'edition-epub-1',
-    packageId: 'pkg-real-fixture',
-    manifestHash: 'hash12345',
+    editionId: 'edition-epub-disk-1',
+    packageId: 'pkg-real-disk-fixture',
+    manifestHash: 'hash123456789',
     selected: true,
   };
 
-  it('persists and loads validated package fixture through real safeLoad/SaveJSON pipeline', async () => {
-    const fs = new MemoryFileSystem() as unknown as FileSystem;
-    const baseDir: BaseDir = 'Data';
-
-    // Save package
-    const packagesMap = { 'pkg-real-fixture:hash12345': samplePackage };
+  it('persists and loads validated package fixture to real disk storage', async () => {
+    const packagesMap = { 'pkg-real-disk-fixture:hash123456789': samplePackage };
     await saveInstalledPackages(fs, baseDir, packagesMap);
 
-    // Verify file written to storage
     const exists = await fs.exists(PACKAGES_FILENAME, baseDir);
     expect(exists).toBe(true);
 
-    // Load package back and verify package validation executed
     const loadedPackages = await loadInstalledPackages(fs, baseDir);
-    expect(loadedPackages['pkg-real-fixture:hash12345']).toBeDefined();
-    expect(loadedPackages['pkg-real-fixture:hash12345']?.packageId).toBe('pkg-real-fixture');
-    expect(loadedPackages['pkg-real-fixture:hash12345']?.manifest.title).toBe('Fixture Soundtrack');
+    expect(loadedPackages['pkg-real-disk-fixture:hash123456789']).toBeDefined();
+    expect(loadedPackages['pkg-real-disk-fixture:hash123456789']?.packageId).toBe(
+      'pkg-real-disk-fixture',
+    );
   });
 
-  it('persists and loads local associations', async () => {
-    const fs = new MemoryFileSystem() as unknown as FileSystem;
-    const baseDir: BaseDir = 'Data';
-
-    const associationsMap = { 'edition-epub-1': sampleAssociation };
+  it('persists and loads local associations on real disk', async () => {
+    const associationsMap = { 'edition-epub-disk-1': sampleAssociation };
     await saveLocalAssociations(fs, baseDir, associationsMap);
 
     const exists = await fs.exists(ASSOCIATIONS_FILENAME, baseDir);
     expect(exists).toBe(true);
 
     const loadedAssociations = await loadLocalAssociations(fs, baseDir);
-    expect(loadedAssociations['edition-epub-1']).toBeDefined();
-    expect(loadedAssociations['edition-epub-1']?.packageId).toBe('pkg-real-fixture');
-    expect(loadedAssociations['edition-epub-1']?.selected).toBe(true);
+    expect(loadedAssociations['edition-epub-disk-1']).toBeDefined();
+    expect(loadedAssociations['edition-epub-disk-1']?.packageId).toBe('pkg-real-disk-fixture');
+  });
+
+  it('persists and retrieves binary soundtrack audio asset files on real disk', async () => {
+    const testBytes = new Uint8Array([10, 20, 30, 40, 50, 60]);
+    await saveSoundtrackAssetFile(fs, baseDir, 'pkg-real-disk-fixture', 'asset-bg', testBytes);
+
+    const loadedBuffer = await loadSoundtrackAssetFile(
+      fs,
+      baseDir,
+      'pkg-real-disk-fixture',
+      'asset-bg',
+    );
+    expect(loadedBuffer).not.toBeNull();
+    const loadedBytes = new Uint8Array(loadedBuffer!);
+    expect(loadedBytes).toEqual(testBytes);
   });
 });

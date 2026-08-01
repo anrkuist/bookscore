@@ -37,11 +37,12 @@ export interface AudioContextInterface {
 export interface SoundtrackPlayer {
   isUnlocked(): boolean;
   unlockGesture(): Promise<boolean>;
-  playCue(cue: AudioCue, audioData?: ArrayBuffer): Promise<void>;
+  playCue(cue: AudioCue, audioData?: ArrayBuffer, startOffsetSec?: number): Promise<void>;
   transitionToSilence(crossfadeSec?: number): Promise<void>;
   pause(): void;
   stop(): void;
   getCurrentCue(): AudioCue | null;
+  getSavedOffset(cueId: string): number | undefined;
 }
 
 export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
@@ -51,6 +52,10 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
   private activeSource: SoundSourceNode | null = null;
   private currentCue: AudioCue | null = null;
   private gestureUnlocked = false;
+
+  private cueStartTime = 0;
+  private cueStartOffset = 0;
+  private savedOffsets = new Map<string, number>();
 
   constructor(customContext?: AudioContextInterface) {
     if (customContext) {
@@ -96,7 +101,15 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
     return false;
   }
 
-  public async playCue(cue: AudioCue, audioData?: ArrayBuffer): Promise<void> {
+  public getSavedOffset(cueId: string): number | undefined {
+    return this.savedOffsets.get(cueId);
+  }
+
+  public async playCue(
+    cue: AudioCue,
+    audioData?: ArrayBuffer,
+    startOffsetSec?: number,
+  ): Promise<void> {
     const ctx = this.ensureContext();
     if (!ctx) return;
 
@@ -104,6 +117,14 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
       const unlocked = await this.unlockGesture();
       if (!unlocked) {
         throw new Error('Gesture unlock required for audio playback');
+      }
+    }
+
+    let startSec = startOffsetSec ?? this.savedOffsets.get(cue.id) ?? cue.startSec;
+    if (startSec >= cue.loopEndSec) {
+      const loopDuration = cue.loopEndSec - cue.loopStartSec;
+      if (loopDuration > 0) {
+        startSec = cue.loopStartSec + ((startSec - cue.loopStartSec) % loopDuration);
       }
     }
 
@@ -141,7 +162,6 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
     if (audioData) {
       try {
         const buffer = await ctx.decodeAudioData(audioData);
-        // Attach buffer if real context
         (source as unknown as { buffer: unknown }).buffer = buffer;
       } catch (_) {}
     }
@@ -151,7 +171,10 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
     source.loopEnd = cue.loopEndSec;
 
     source.connect(newGain);
-    source.start(now, cue.startSec);
+    source.start(now, startSec);
+
+    this.cueStartTime = now;
+    this.cueStartOffset = startSec;
 
     this.activeSource = source;
     this.activeGain = newGain;
@@ -189,7 +212,18 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
   }
 
   public pause(): void {
-    if (this.activeSource) {
+    if (this.activeSource && this.ctx && this.currentCue) {
+      const elapsed = this.ctx.currentTime - this.cueStartTime;
+      let pos = this.cueStartOffset + elapsed;
+      const cue = this.currentCue;
+      if (pos >= cue.loopEndSec) {
+        const loopDuration = cue.loopEndSec - cue.loopStartSec;
+        if (loopDuration > 0) {
+          pos = cue.loopStartSec + ((pos - cue.loopStartSec) % loopDuration);
+        }
+      }
+      this.savedOffsets.set(cue.id, pos);
+
       try {
         this.activeSource.stop();
       } catch (_) {}
@@ -206,6 +240,7 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
   public stop(): void {
     this.pause();
     this.currentCue = null;
+    this.savedOffsets.clear();
   }
 
   public getCurrentCue(): AudioCue | null {

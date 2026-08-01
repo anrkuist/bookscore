@@ -9,6 +9,9 @@ import {
 import { LocationReportSeam } from '@/services/bookscore/locationSeam';
 import { SoundtrackPlayer } from '@/services/bookscore/soundtrackPlayer';
 import { findCueForCfi } from '@/services/bookscore/cfiUtils';
+import { loadSoundtrackAssetFile } from '@/services/bookscore/assetStorage';
+import { FileSystem } from '@/types/system';
+import { getInitializedAppService } from '@/services/environment';
 
 export interface SoundtrackStoreState {
   capabilityEnabled: boolean;
@@ -29,14 +32,45 @@ export interface SoundtrackStoreState {
     initialCfi?: string,
   ) => void;
   reportLocation: (report: LocationReport) => void;
-  play: (fromGesture?: boolean) => Promise<void>;
+  play: (fromGesture?: boolean, customFs?: FileSystem) => Promise<void>;
   pause: () => void;
-  togglePlayPause: () => Promise<void>;
+  togglePlayPause: (customFs?: FileSystem) => Promise<void>;
   resetSoundtrack: () => void;
 }
 
 const locationSeam = new LocationReportSeam();
 let playerInstance: SoundtrackPlayer | null = null;
+
+async function resolveAndPlayAudioCue(
+  cue: SoundtrackCue,
+  pkg: InstalledPackage,
+  player: SoundtrackPlayer,
+  customFs?: FileSystem,
+): Promise<boolean> {
+  if (cue.type !== 'audio') return false;
+
+  const asset = pkg.manifest.assets.find((a) => a.id === cue.assetId);
+  if (!asset) {
+    player.transitionToSilence();
+    return false;
+  }
+
+  const appSvc = getInitializedAppService();
+  const fs = customFs ?? (appSvc as unknown as FileSystem | undefined);
+  let audioData: ArrayBuffer | null = null;
+  if (fs) {
+    audioData = await loadSoundtrackAssetFile(fs, 'Data', pkg.packageId, asset.id);
+  }
+
+  try {
+    await player.playCue(cue, audioData ?? undefined);
+    return true;
+  } catch (err) {
+    console.warn('Failed to play soundtrack audio cue, falling back to safe silence:', err);
+    player.transitionToSilence();
+    return false;
+  }
+}
 
 export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   capabilityEnabled: false,
@@ -90,8 +124,8 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     locationSeam.reset();
 
     // Reopen-selected-but-paused semantics:
-    // When book opens, if initialCfi is given, resolve containing cue.
-    // The containing cue is set as selectedCue, but status is 'paused' and isUserPlaying is false.
+    // When book opens, resolve containing cue.
+    // Containing cue is set as selectedCue, but status is 'paused' and isUserPlaying is false.
     let containingCue: SoundtrackCue | null = null;
     if (initialCfi) {
       containingCue = findCueForCfi(initialCfi, pkg.manifest.cues);
@@ -119,7 +153,6 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     const res = locationSeam.processReport(report, activePackage.manifest.cues);
 
     if (res.isStaleOrDuplicate) {
-      // Stale or duplicate reports select safe silence
       if (playerInstance) {
         playerInstance.transitionToSilence();
       }
@@ -135,7 +168,6 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
       return;
     }
 
-    // Audio cue resolved
     const newCue = res.selectedCue;
     if (!newCue || newCue.type !== 'audio') {
       set({ selectedCue: null, playbackStatus: 'silence' });
@@ -150,17 +182,20 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
       } else {
         set({ playbackStatus: 'playing' });
         if (playerInstance) {
-          playerInstance.playCue(newCue);
+          void resolveAndPlayAudioCue(newCue, activePackage, playerInstance).then((success) => {
+            if (!success) {
+              set({ playbackStatus: 'silence' });
+            }
+          });
         }
       }
     } else {
-      // Cue is selected, but reader has not initiated play -> remain paused
       set({ playbackStatus: 'paused' });
     }
   },
 
-  play: async (fromGesture = true) => {
-    const { capabilityEnabled, selectedCue, isGestureUnlocked } = get();
+  play: async (fromGesture = true, customFs?: FileSystem) => {
+    const { capabilityEnabled, activePackage, selectedCue, isGestureUnlocked } = get();
     if (!capabilityEnabled) return;
 
     let unlocked = isGestureUnlocked;
@@ -176,10 +211,16 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
 
     set({ isUserPlaying: true });
 
-    if (selectedCue && selectedCue.type === 'audio') {
+    if (selectedCue && selectedCue.type === 'audio' && activePackage && playerInstance) {
       set({ playbackStatus: 'playing' });
-      if (playerInstance) {
-        await playerInstance.playCue(selectedCue);
+      const success = await resolveAndPlayAudioCue(
+        selectedCue,
+        activePackage,
+        playerInstance,
+        customFs,
+      );
+      if (!success) {
+        set({ playbackStatus: 'silence' });
       }
     } else {
       set({ playbackStatus: 'silence' });
@@ -193,12 +234,12 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     }
   },
 
-  togglePlayPause: async () => {
+  togglePlayPause: async (customFs?: FileSystem) => {
     const { isUserPlaying } = get();
     if (isUserPlaying) {
       get().pause();
     } else {
-      await get().play(true);
+      await get().play(true, customFs);
     }
   },
 

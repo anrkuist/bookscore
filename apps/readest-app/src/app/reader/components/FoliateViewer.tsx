@@ -27,6 +27,12 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useEinkMode } from '@/hooks/useEinkMode';
 import { useKOSync } from '../hooks/useKOSync';
 import { useFileSync } from '../hooks/useFileSync';
+import { useSoundtrackStore } from '@/store/soundtrackStore';
+import { WebAudioSoundtrackPlayer } from '@/services/bookscore/soundtrackPlayer';
+import { loadInstalledPackages, loadLocalAssociations } from '@/services/bookscore/persistence';
+import { getInitializedAppService } from '@/services/environment';
+import { getBookProgress } from '@/store/readerProgressStore';
+import type { FileSystem } from '@/types/system';
 import {
   applyFixedlayoutStyles,
   applyImageStyle,
@@ -198,6 +204,7 @@ const FoliateViewer: React.FC<{
   // the page is busy — which is the behaviour we want here.
   const pendingRelocateRef = useRef<CustomEvent | null>(null);
   const relocateRafRef = useRef<number | null>(null);
+  const soundtrackSeqRef = useRef<number>(0);
   const cancelRelocateScheduled = useCallback(() => {
     const id = relocateRafRef.current;
     if (id == null) return;
@@ -225,6 +232,15 @@ const FoliateViewer: React.FC<{
       detail.range,
       detail.fraction,
     );
+
+    if (isTauriAppPlatform() && detail.cfi) {
+      soundtrackSeqRef.current += 1;
+      useSoundtrackStore.getState().reportLocation({
+        seq: soundtrackSeqRef.current,
+        kind: 'resolved',
+        cfi: detail.cfi,
+      });
+    }
   }, [bookKey, setProgress]);
 
   const progressRelocateHandler = (event: Event) => {
@@ -266,6 +282,35 @@ const FoliateViewer: React.FC<{
       pendingRelocateRef.current = null;
     };
   }, [cancelRelocateScheduled, commitRelocate]);
+
+  useEffect(() => {
+    if (isTauriAppPlatform() && !appService?.isMobile) {
+      const store = useSoundtrackStore.getState();
+      store.setCapabilityEnabled(true);
+      store.registerSoundtrackPlayer(new WebAudioSoundtrackPlayer());
+      const editionId = bookKey.split('-')[0]!;
+      const savedProgress = getBookProgress(bookKey);
+      const initialCfi = savedProgress?.location;
+      const appSvc = getInitializedAppService();
+      if (appSvc) {
+        const fs = appSvc as unknown as FileSystem;
+        loadInstalledPackages(fs, 'Data')
+          .then((packages) => {
+            loadLocalAssociations(fs, 'Data').then((associations) => {
+              store.loadSoundtrackForBook(editionId, packages, associations, initialCfi);
+            });
+          })
+          .catch((err) => {
+            console.warn('Failed to load soundtrack persistence:', err);
+          });
+      }
+    }
+    return () => {
+      if (isTauriAppPlatform()) {
+        useSoundtrackStore.getState().resetSoundtrack();
+      }
+    };
+  }, [bookKey, appService?.isMobile]);
 
   const getDocTransformHandler = ({ width, height }: { width: number; height: number }) => {
     return (event: Event) => {

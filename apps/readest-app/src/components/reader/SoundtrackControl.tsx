@@ -3,12 +3,14 @@
 import React from 'react';
 import { useSoundtrackStore } from '@/store/soundtrackStore';
 import { isTauriAppPlatform } from '@/services/environment';
+import { useTranslation } from '@/hooks/useTranslation';
 
 export interface SoundtrackControlProps {
   isMobile?: boolean;
 }
 
 export const SoundtrackControl: React.FC<SoundtrackControlProps> = ({ isMobile }) => {
+  const _ = useTranslation();
   const capabilityEnabled = useSoundtrackStore((s) => s.capabilityEnabled);
   const activePackage = useSoundtrackStore((s) => s.activePackage);
   const selectedCue = useSoundtrackStore((s) => s.selectedCue);
@@ -26,27 +28,27 @@ export const SoundtrackControl: React.FC<SoundtrackControlProps> = ({ isMobile }
 
   const cueLabel = selectedCue
     ? selectedCue.type === 'audio'
-      ? `Cue ${selectedCue.id}`
-      : 'Silence'
-    : 'No Cue';
+      ? `${_('Cue')} ${selectedCue.id}`
+      : _('Silence')
+    : _('No Cue');
 
   const statusTooltip = isPlaying
-    ? `Soundtrack Playing (${cueLabel})`
+    ? `${_('Soundtrack Playing')} (${cueLabel})`
     : isGestureRequired
-      ? `Click to enable Soundtrack Audio (${cueLabel})`
-      : `Soundtrack Paused (${cueLabel})`;
+      ? `${_('Click to enable Soundtrack Audio')} (${cueLabel})`
+      : `${_('Soundtrack Paused')} (${cueLabel})`;
 
   return (
     <div className='flex items-center gap-1.5' title={statusTooltip}>
       <button
         type='button'
         onClick={() => void togglePlayPause()}
-        aria-label={isPlaying ? 'Pause soundtrack' : 'Play soundtrack'}
+        aria-label={isPlaying ? _('Pause soundtrack') : _('Play soundtrack')}
         className='btn btn-ghost btn-xs sm:btn-sm gap-1 eink-bordered font-normal'
       >
         <span className='text-xs'>🎵</span>
         <span className='text-xs max-w-[100px] truncate hidden sm:inline'>
-          {isPlaying ? 'Playing' : isGestureRequired ? 'Click Play' : 'Paused'}
+          {isPlaying ? _('Playing') : isGestureRequired ? _('Click Play') : _('Paused')}
         </span>
       </button>
     </div>
