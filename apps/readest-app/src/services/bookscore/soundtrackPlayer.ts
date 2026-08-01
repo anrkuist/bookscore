@@ -37,7 +37,7 @@ export interface AudioContextInterface {
 export interface SoundtrackPlayer {
   isUnlocked(): boolean;
   unlockGesture(): Promise<boolean>;
-  playCue(cue: AudioCue, audioData?: ArrayBuffer, startOffsetSec?: number): Promise<void>;
+  playCue(cue: AudioCue, audioData?: ArrayBuffer, isResume?: boolean): Promise<void>;
   transitionToSilence(crossfadeSec?: number): Promise<void>;
   pause(): void;
   stop(): void;
@@ -106,11 +106,7 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
     return this.savedOffsets.get(cueId);
   }
 
-  public async playCue(
-    cue: AudioCue,
-    audioData?: ArrayBuffer,
-    startOffsetSec?: number,
-  ): Promise<void> {
+  public async playCue(cue: AudioCue, audioData?: ArrayBuffer, isResume = false): Promise<void> {
     const ctx = this.ensureContext();
     if (!ctx) return;
 
@@ -121,7 +117,13 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
       }
     }
 
-    let startSec = startOffsetSec ?? this.savedOffsets.get(cue.id) ?? cue.startSec;
+    let startSec = cue.startSec;
+    if (isResume && this.savedOffsets.has(cue.id)) {
+      startSec = this.savedOffsets.get(cue.id)!;
+    } else {
+      this.savedOffsets.delete(cue.id);
+    }
+
     if (startSec >= cue.loopEndSec) {
       const loopDuration = cue.loopEndSec - cue.loopStartSec;
       if (loopDuration > 0) {

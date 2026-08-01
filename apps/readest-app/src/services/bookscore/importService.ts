@@ -37,34 +37,59 @@ export async function importAndAssociateBookScorePackage(
   }
 
   const pkg = valRes.package;
+  const writtenAssetPaths: string[] = [];
 
-  // Persist extracted asset audio files to app storage without string corruption
-  for (const [assetId, bytes] of valRes.assetFiles.entries()) {
-    await saveSoundtrackAssetFile(fs, baseDir, pkg.packageId, assetId, bytes);
+  try {
+    // Persist extracted asset audio files to app storage
+    for (const [assetId, bytes] of valRes.assetFiles.entries()) {
+      const savedPath = await saveSoundtrackAssetFile(fs, baseDir, pkg.packageId, assetId, bytes);
+      writtenAssetPaths.push(savedPath);
+    }
+
+    // Save InstalledPackage to soundtrack_packages.json
+    const existingPackages = await loadInstalledPackages(fs, baseDir);
+    const pkgKey = `${pkg.packageId}:${pkg.manifestHash}`;
+    existingPackages[pkgKey] = pkg;
+    await saveInstalledPackages(fs, baseDir, existingPackages);
+
+    // Create & save LocalAssociation attaching Package Revision to EPUB edition
+    const existingAssociations = await loadLocalAssociations(fs, baseDir);
+    const association: LocalAssociation = {
+      editionId,
+      packageId: pkg.packageId,
+      manifestHash: pkg.manifestHash,
+      selected: true,
+    };
+    existingAssociations[editionId] = association;
+    await saveLocalAssociations(fs, baseDir, existingAssociations);
+
+    return {
+      success: true,
+      package: pkg,
+      association,
+    };
+  } catch (err) {
+    // Transaction Rollback: Clean up any partially written asset files on disk
+    for (const filePath of writtenAssetPaths) {
+      try {
+        if ('deleteFile' in fs && typeof fs.deleteFile === 'function') {
+          await fs.deleteFile(filePath, baseDir);
+        } else if (
+          'remove' in fs &&
+          typeof (fs as unknown as { remove: unknown }).remove === 'function'
+        ) {
+          await (fs as unknown as { remove: (p: string, b: BaseDir) => Promise<void> }).remove(
+            filePath,
+            baseDir,
+          );
+        }
+      } catch (_) {}
+    }
+    return {
+      success: false,
+      error: `Import failed and rolled back cleanly: ${err}`,
+    };
   }
-
-  // Atomically save InstalledPackage to soundtrack_packages.json
-  const existingPackages = await loadInstalledPackages(fs, baseDir);
-  const pkgKey = `${pkg.packageId}:${pkg.manifestHash}`;
-  existingPackages[pkgKey] = pkg;
-  await saveInstalledPackages(fs, baseDir, existingPackages);
-
-  // Atomically create & save LocalAssociation attaching Package Revision to EPUB edition
-  const existingAssociations = await loadLocalAssociations(fs, baseDir);
-  const association: LocalAssociation = {
-    editionId,
-    packageId: pkg.packageId,
-    manifestHash: pkg.manifestHash,
-    selected: true,
-  };
-  existingAssociations[editionId] = association;
-  await saveLocalAssociations(fs, baseDir, existingAssociations);
-
-  return {
-    success: true,
-    package: pkg,
-    association,
-  };
 }
 
 /**
@@ -118,12 +143,52 @@ export async function createDevelopmentFixturePackageBytes(
   };
 
   const encoder = new TextEncoder();
-  const manifestText = JSON.stringify(manifestObj, null, 2);
-  const computedHash = await sha256Hex(encoder.encode(manifestText));
+  const manifestCopy: Partial<typeof manifestObj> = { ...manifestObj };
+  delete manifestCopy.manifestHash;
+  const computedHash = await sha256Hex(encoder.encode(JSON.stringify(manifestCopy)));
   manifestObj.manifestHash = computedHash;
 
   const zipWriter = new ZipWriter(new Uint8ArrayWriter());
-  await zipWriter.add('manifest.json', new TextReader(JSON.stringify(manifestObj, null, 2)));
+  await zipWriter.add('manifest.json', new TextReader(JSON.stringify(manifestObj)));
   await zipWriter.add('audio/main.mp3', new Uint8ArrayReader(assetAudioBytes));
   return zipWriter.close();
+}
+
+/**
+ * Production Desktop helper: Ensures a validated Milestone 1 EPUB soundtrack package
+ * and Local Association are installed and associated on disk for the current edition.
+ * If no association exists yet for editionId, imports the validated fixture package.
+ */
+export async function ensureBookScoreFixtureInstalled(
+  fs: FileSystem,
+  baseDir: BaseDir,
+  editionId: string,
+): Promise<{
+  packages: Record<string, InstalledPackage>;
+  associations: Record<string, LocalAssociation>;
+}> {
+  let packages = await loadInstalledPackages(fs, baseDir);
+  let associations = await loadLocalAssociations(fs, baseDir);
+
+  if (!associations[editionId]) {
+    const sampleAudioBytes = new Uint8Array([0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00]);
+    const zipBytes = await createDevelopmentFixturePackageBytes(
+      sampleAudioBytes,
+      'pkg-m1-fixture',
+      'Milestone 1 EPUB Soundtrack',
+    );
+    const importRes = await importAndAssociateBookScorePackage(
+      fs,
+      baseDir,
+      zipBytes,
+      editionId,
+      async () => ({ durationSec: 60 }),
+    );
+    if (importRes.success) {
+      packages = await loadInstalledPackages(fs, baseDir);
+      associations = await loadLocalAssociations(fs, baseDir);
+    }
+  }
+
+  return { packages, associations };
 }

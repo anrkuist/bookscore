@@ -113,7 +113,7 @@ describe('packageValidation', () => {
           path: 'audio/track1.mp3',
           mimeType: 'audio/mpeg',
           hash: assetHash,
-          durationSec: 30,
+          durationSec: 60,
         },
       ],
       cues: [
@@ -132,9 +132,9 @@ describe('packageValidation', () => {
     };
 
     const encoder = new TextEncoder();
-    const manifestText = JSON.stringify(manifestObj, null, 2);
-    const computedManifestHash = await sha256Hex(encoder.encode(manifestText));
-    manifestObj.manifestHash = computedManifestHash;
+    const manifestCopy = { ...manifestObj };
+    delete (manifestCopy as Partial<typeof manifestObj>).manifestHash;
+    manifestObj.manifestHash = await sha256Hex(encoder.encode(JSON.stringify(manifestCopy)));
 
     const zipWriter = new ZipWriter(new Uint8ArrayWriter());
     await zipWriter.add('manifest.json', new TextReader(JSON.stringify(manifestObj)));
@@ -204,8 +204,9 @@ describe('packageValidation', () => {
     };
 
     const encoder = new TextEncoder();
-    const manifestText = JSON.stringify(manifestObj, null, 2);
-    manifestObj.manifestHash = await sha256Hex(encoder.encode(manifestText));
+    const manifestCopy = { ...manifestObj };
+    delete (manifestCopy as Partial<typeof manifestObj>).manifestHash;
+    manifestObj.manifestHash = await sha256Hex(encoder.encode(JSON.stringify(manifestCopy)));
 
     const zipWriter = new ZipWriter(new Uint8ArrayWriter());
     await zipWriter.add('manifest.json', new TextReader(JSON.stringify(manifestObj)));
@@ -218,6 +219,121 @@ describe('packageValidation', () => {
 
     const res = await validateBookScorePackageArchive(zipArchiveBytes, failingDecoder);
     expect(res.valid).toBe(false);
-    expect(res.errors.some((e) => e.includes('runtime audio decoding failed'))).toBe(true);
+    expect(
+      res.errors.some(
+        (e) => e.includes('runtime audio decoding failed') || e.includes('audio decoding failed'),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects package archive when declared manifestHash does not match canonical computed manifest hash', async () => {
+    const { ZipWriter, Uint8ArrayWriter, Uint8ArrayReader, TextReader } = await import(
+      '@zip.js/zip.js'
+    );
+
+    const assetBytes = new Uint8Array([1, 2, 3, 4]);
+    const assetHash = await sha256Hex(assetBytes);
+
+    const manifestObj = {
+      packageId: 'pkg-mismatch-hash',
+      title: 'Mismatch Manifest Hash Test',
+      version: 1,
+      manifestHash: 'bad_arbitrary_hash_12345',
+      editionCompatibility: [
+        {
+          algorithm: 'readest-partial-md5-v1',
+          digest: 'md5digest',
+          epubByteLength: 10000,
+        },
+      ],
+      assets: [
+        {
+          id: 'track-1',
+          path: 'audio/track1.mp3',
+          mimeType: 'audio/mpeg',
+          hash: assetHash,
+          durationSec: 30,
+        },
+      ],
+      cues: [
+        {
+          id: 'cue-1',
+          startCfi: 'epubcfi(/6/2!/4/2:0)',
+          type: 'audio',
+          assetId: 'track-1',
+          startSec: 0,
+          loopStartSec: 0,
+          loopEndSec: 20,
+          volume: 1,
+          crossfadeSec: 0.5,
+        },
+      ],
+    };
+
+    const zipWriter = new ZipWriter(new Uint8ArrayWriter());
+    await zipWriter.add('manifest.json', new TextReader(JSON.stringify(manifestObj)));
+    await zipWriter.add('audio/track1.mp3', new Uint8ArrayReader(assetBytes));
+    const zipArchiveBytes = await zipWriter.close();
+
+    const res = await validateBookScorePackageArchive(zipArchiveBytes);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some((e) => e.includes('Manifest hash mismatch'))).toBe(true);
+  });
+
+  it('rejects package archive when decoded audio duration does not match declared asset duration or loop range', async () => {
+    const { ZipWriter, Uint8ArrayWriter, Uint8ArrayReader, TextReader } = await import(
+      '@zip.js/zip.js'
+    );
+
+    const assetBytes = new Uint8Array([1, 2, 3, 4]);
+    const assetHash = await sha256Hex(assetBytes);
+
+    const manifestObj = {
+      packageId: 'pkg-short-audio',
+      title: 'Short Audio Test',
+      version: 1,
+      manifestHash: '',
+      editionCompatibility: [
+        {
+          algorithm: 'readest-partial-md5-v1',
+          digest: 'md5digest',
+          epubByteLength: 10000,
+        },
+      ],
+      assets: [
+        {
+          id: 'track-short',
+          path: 'audio/track1.mp3',
+          mimeType: 'audio/mpeg',
+          hash: assetHash,
+          durationSec: 60, // declared 60s
+        },
+      ],
+      cues: [
+        {
+          id: 'cue-1',
+          startCfi: 'epubcfi(/6/2!/4/2:0)',
+          type: 'audio',
+          assetId: 'track-short',
+          startSec: 0,
+          loopStartSec: 0,
+          loopEndSec: 55, // loop end 55s
+          volume: 1,
+          crossfadeSec: 0.5,
+        },
+      ],
+    };
+
+    const zipWriter = new ZipWriter(new Uint8ArrayWriter());
+    await zipWriter.add('manifest.json', new TextReader(JSON.stringify(manifestObj)));
+    await zipWriter.add('audio/track1.mp3', new Uint8ArrayReader(assetBytes));
+    const zipArchiveBytes = await zipWriter.close();
+
+    // Decoder returns 10s actual duration for declared 60s file
+    const shortAudioDecoder = async () => ({ durationSec: 10 });
+
+    const res = await validateBookScorePackageArchive(zipArchiveBytes, shortAudioDecoder);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some((e) => e.includes('does not match declared asset duration'))).toBe(true);
   });
 });

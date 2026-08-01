@@ -29,7 +29,7 @@ import { useKOSync } from '../hooks/useKOSync';
 import { useFileSync } from '../hooks/useFileSync';
 import { useSoundtrackStore } from '@/store/soundtrackStore';
 import { WebAudioSoundtrackPlayer } from '@/services/bookscore/soundtrackPlayer';
-import { loadInstalledPackages, loadLocalAssociations } from '@/services/bookscore/persistence';
+import { ensureBookScoreFixtureInstalled } from '@/services/bookscore/importService';
 import { getInitializedAppService } from '@/services/environment';
 import { getBookProgress } from '@/store/readerProgressStore';
 import { isBookScoreCapabilityEnabled } from '@/services/bookscore/capability';
@@ -297,14 +297,12 @@ const FoliateViewer: React.FC<{
       const appSvc = getInitializedAppService();
       if (appSvc) {
         const fs = appSvc as unknown as FileSystem;
-        loadInstalledPackages(fs, 'Data')
-          .then((packages) => {
-            loadLocalAssociations(fs, 'Data').then((associations) => {
-              store.loadSoundtrackForBook(editionId, packages, associations, initialCfi);
-            });
+        ensureBookScoreFixtureInstalled(fs, 'Data', editionId)
+          .then(({ packages, associations }) => {
+            store.loadSoundtrackForBook(editionId, packages, associations, initialCfi);
           })
           .catch((err) => {
-            console.warn('Failed to load soundtrack persistence:', err);
+            console.warn('Failed to load or install soundtrack fixture persistence:', err);
           });
       }
     }

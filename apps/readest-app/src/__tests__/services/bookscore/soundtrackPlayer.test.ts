@@ -117,8 +117,8 @@ describe('WebAudioSoundtrackPlayer', () => {
     const savedOffset = player.getSavedOffset(sampleCue.id);
     expect(savedOffset).toBe(20);
 
-    // Resume playback for the same cue
-    await player.playCue(sampleCue);
+    // Resume playback for the same cue with isResume = true
+    await player.playCue(sampleCue, undefined, true);
 
     const secondSource = vi.mocked(fakeCtx.createBufferSource).mock.results[1]
       ?.value as FakeBufferSourceNode;

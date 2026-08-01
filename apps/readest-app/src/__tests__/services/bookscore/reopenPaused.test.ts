@@ -154,4 +154,52 @@ describe('Reopen-Selected-But-Paused Semantics & Capability Gating', () => {
     expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-shire');
     expect(useSoundtrackStore.getState().playbackStatus).toBe('paused');
   });
+
+  it('enforces cue restart on re-entry during A -> pause -> resume -> B -> A sequence', async () => {
+    const store = useSoundtrackStore.getState();
+    store.setCapabilityEnabled(true);
+
+    const playHistory: { cueId: string; isResume: boolean }[] = [];
+    const mockPlayer = {
+      isUnlocked: () => true,
+      unlockGesture: async () => true,
+      playCue: async (cue: { id: string }, _data?: ArrayBuffer, isResume = false) => {
+        playHistory.push({ cueId: cue.id, isResume });
+      },
+      transitionToSilence: async () => {},
+      pause: () => {},
+      stop: () => {},
+      dispose: async () => {},
+      getCurrentCue: () => null,
+      getSavedOffset: () => undefined,
+    };
+
+    store.registerSoundtrackPlayer(mockPlayer);
+    store.loadSoundtrackForBook(
+      'lotr-edition-1',
+      packagesMap,
+      associationsMap,
+      'epubcfi(/6/2!/4/2:0)',
+    );
+
+    // 1. Play Cue A after reopening book at saved position (playbackStatus was 'paused')
+    await store.play(true);
+    expect(playHistory[0]).toEqual({ cueId: 'cue-shire', isResume: true });
+
+    // 2. Pause Cue A
+    store.pause();
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('paused');
+
+    // 3. Resume Cue A -> isResume must be true
+    await store.play(true);
+    expect(playHistory[1]).toEqual({ cueId: 'cue-shire', isResume: true });
+
+    // 4. Transition to Cue B -> isResume must be false (starts at startSec)
+    store.reportLocation({ seq: 2, kind: 'resolved', cfi: 'epubcfi(/6/20!/4/2:0)' });
+    expect(playHistory[2]).toEqual({ cueId: 'cue-moria', isResume: false });
+
+    // 5. Re-enter Cue A -> isResume must be false (restarts at startSec)
+    store.reportLocation({ seq: 3, kind: 'resolved', cfi: 'epubcfi(/6/2!/4/2:0)' });
+    expect(playHistory[3]).toEqual({ cueId: 'cue-shire', isResume: false });
+  });
 });

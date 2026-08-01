@@ -254,9 +254,6 @@ export async function validateBookScorePackageArchive(
 
     const manifestWriter = new TextWriter();
     const manifestText = (await manifestEntry.getData(manifestWriter)) as string;
-    const encoder = new TextEncoder();
-    const manifestBytes = encoder.encode(manifestText);
-    const computedManifestHash = await sha256Hex(manifestBytes);
 
     let manifestRaw: Partial<SoundtrackPackageManifest>;
     try {
@@ -266,9 +263,27 @@ export async function validateBookScorePackageArchive(
       return { valid: false, errors: [`Invalid manifest JSON: ${parseError}`] };
     }
 
-    if (!manifestRaw.manifestHash) {
-      manifestRaw.manifestHash = computedManifestHash;
+    // Canonical manifest hash calculation by stripping manifestHash key
+    const manifestCopy = { ...manifestRaw };
+    delete manifestCopy.manifestHash;
+    const encoder = new TextEncoder();
+    const computedManifestHash = await sha256Hex(encoder.encode(JSON.stringify(manifestCopy)));
+
+    if (
+      manifestRaw.manifestHash &&
+      manifestRaw.manifestHash !== '' &&
+      manifestRaw.manifestHash.toLowerCase() !== computedManifestHash.toLowerCase()
+    ) {
+      await reader.close();
+      return {
+        valid: false,
+        errors: [
+          `Manifest hash mismatch (declared ${manifestRaw.manifestHash}, computed ${computedManifestHash})`,
+        ],
+      };
     }
+
+    manifestRaw.manifestHash = computedManifestHash;
 
     const manifestValidation = validatePackageManifest(manifestRaw);
     if (!manifestValidation.valid || !manifestValidation.package) {
@@ -303,12 +318,29 @@ export async function validateBookScorePackageArchive(
         continue;
       }
 
-      // Runtime audio decoding verification
+      // Runtime audio decoding & duration bounds verification
       try {
         const decoded = await audioDecoder(assetBytes);
         if (!decoded || typeof decoded.durationSec !== 'number' || decoded.durationSec <= 0) {
           errors.push(`Asset ${asset.id} decoded duration is invalid`);
           continue;
+        }
+
+        if (Math.abs(decoded.durationSec - asset.durationSec) > 1.0) {
+          errors.push(
+            `Asset ${asset.id} decoded duration (${decoded.durationSec.toFixed(1)}s) does not match declared asset duration (${asset.durationSec}s)`,
+          );
+          continue;
+        }
+
+        for (const cue of validManifest.cues) {
+          if (cue.type === 'audio' && cue.assetId === asset.id) {
+            if (cue.loopEndSec > decoded.durationSec) {
+              errors.push(
+                `Audio cue ${cue.id} loopEndSec (${cue.loopEndSec}s) exceeds decoded asset duration (${decoded.durationSec.toFixed(1)}s)`,
+              );
+            }
+          }
         }
       } catch (decodeErr) {
         errors.push(`Asset ${asset.id} runtime audio decoding failed: ${decodeErr}`);

@@ -10,6 +10,7 @@ import {
 import {
   importAndAssociateBookScorePackage,
   createDevelopmentFixturePackageBytes,
+  ensureBookScoreFixtureInstalled,
 } from '@/services/bookscore/importService';
 import { loadInstalledPackages, loadLocalAssociations } from '@/services/bookscore/persistence';
 import { useSoundtrackStore } from '@/store/soundtrackStore';
@@ -169,5 +170,109 @@ describe('BookScore Import and Binary Storage Integration', () => {
     expect(useSoundtrackStore.getState().activePackage?.packageId).toBe('pkg-prod-seam');
     expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-opening');
     expect(useSoundtrackStore.getState().playbackStatus).toBe('paused');
+  });
+
+  it('runs ensureBookScoreFixtureInstalled production seam when opening edition with no prior association', async () => {
+    const editionId = 'edition-desktop-open-456';
+    const { packages, associations } = await ensureBookScoreFixtureInstalled(
+      fs,
+      baseDir,
+      editionId,
+    );
+
+    expect(associations[editionId]).toBeDefined();
+    expect(associations[editionId]?.packageId).toBe('pkg-m1-fixture');
+    expect(Object.keys(packages).length).toBeGreaterThan(0);
+  });
+
+  it('rolls back asset file writes on persistence failure to guarantee atomic package import', async () => {
+    const { ZipWriter, Uint8ArrayWriter, Uint8ArrayReader, TextReader } = await import(
+      '@zip.js/zip.js'
+    );
+    const { sha256Hex } = await import('@/services/bookscore/packageValidation');
+    const asset1Bytes = new Uint8Array([1, 2, 3, 4]);
+    const asset2Bytes = new Uint8Array([5, 6, 7, 8]);
+    const hash1 = await sha256Hex(asset1Bytes);
+    const hash2 = await sha256Hex(asset2Bytes);
+
+    const manifestObj = {
+      packageId: 'pkg-rollback-test',
+      title: 'Rollback Package Test',
+      version: 1,
+      manifestHash: '',
+      editionCompatibility: [
+        {
+          algorithm: 'readest-partial-md5-v1' as const,
+          digest: 'digest',
+          epubByteLength: 1000,
+        },
+      ],
+      assets: [
+        {
+          id: 'asset-1',
+          path: 'audio/asset1.mp3',
+          mimeType: 'audio/mpeg' as const,
+          hash: hash1,
+          durationSec: 60,
+        },
+        {
+          id: 'asset-2',
+          path: 'audio/asset2.mp3',
+          mimeType: 'audio/mpeg' as const,
+          hash: hash2,
+          durationSec: 60,
+        },
+      ],
+      cues: [
+        {
+          id: 'cue-1',
+          startCfi: 'epubcfi(/6/2!/4/2:0)',
+          type: 'audio' as const,
+          assetId: 'asset-1',
+          startSec: 0,
+          loopStartSec: 0,
+          loopEndSec: 30,
+          volume: 1,
+          crossfadeSec: 0.5,
+        },
+      ],
+    };
+
+    const encoder = new TextEncoder();
+    const manifestCopy = { ...manifestObj };
+    delete (manifestCopy as Partial<typeof manifestObj>).manifestHash;
+    manifestObj.manifestHash = await sha256Hex(encoder.encode(JSON.stringify(manifestCopy)));
+
+    const zipWriter = new ZipWriter(new Uint8ArrayWriter());
+    await zipWriter.add('manifest.json', new TextReader(JSON.stringify(manifestObj)));
+    await zipWriter.add('audio/asset1.mp3', new Uint8ArrayReader(asset1Bytes));
+    await zipWriter.add('audio/asset2.mp3', new Uint8ArrayReader(asset2Bytes));
+    const zipArchiveBytes = await zipWriter.close();
+
+    // Fault-injecting FileSystem that fails when writing asset-2
+    const faultyFs: FileSystem = Object.assign(Object.create(fs), {
+      writeFile: async (pathStr: string, b: BaseDir, data: string | ArrayBuffer) => {
+        if (pathStr.includes('asset-2')) {
+          throw new Error('Disk error during asset 2 write');
+        }
+        return fs.writeFile(pathStr, b, data);
+      },
+    });
+
+    const res = await importAndAssociateBookScorePackage(
+      faultyFs,
+      baseDir,
+      zipArchiveBytes,
+      'edition-fault-1',
+      async () => ({ durationSec: 60 }),
+    );
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('rolled back cleanly');
+
+    // Verify written asset-1 file was cleaned up by rollback
+    const asset1Path = 'soundtracks/pkg-rollback-test/asset-1.mp3';
+    const asset1Exists = await fs.exists(asset1Path, baseDir);
+    expect(asset1Exists).toBe(false);
   });
 });

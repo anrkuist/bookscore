@@ -46,6 +46,7 @@ async function resolveAndPlayAudioCue(
   pkg: InstalledPackage,
   player: SoundtrackPlayer,
   customFs?: FileSystem,
+  isResume = false,
 ): Promise<boolean> {
   if (cue.type !== 'audio') return false;
 
@@ -63,7 +64,7 @@ async function resolveAndPlayAudioCue(
   }
 
   try {
-    await player.playCue(cue, audioData ?? undefined);
+    await player.playCue(cue, audioData ?? undefined, isResume);
     return true;
   } catch (err) {
     console.warn('Failed to play soundtrack audio cue, falling back to safe silence:', err);
@@ -180,11 +181,13 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
       } else {
         set({ playbackStatus: 'playing' });
         if (playerInstance) {
-          void resolveAndPlayAudioCue(newCue, activePackage, playerInstance).then((success) => {
-            if (!success) {
-              set({ playbackStatus: 'silence' });
-            }
-          });
+          void resolveAndPlayAudioCue(newCue, activePackage, playerInstance, undefined, false).then(
+            (success) => {
+              if (!success) {
+                set({ playbackStatus: 'silence' });
+              }
+            },
+          );
         }
       }
     } else {
@@ -193,7 +196,8 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   },
 
   play: async (fromGesture = true, customFs?: FileSystem) => {
-    const { capabilityEnabled, activePackage, selectedCue, isGestureUnlocked } = get();
+    const { capabilityEnabled, activePackage, selectedCue, isGestureUnlocked, playbackStatus } =
+      get();
     if (!capabilityEnabled) return;
 
     let unlocked = isGestureUnlocked;
@@ -207,6 +211,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
       return;
     }
 
+    const isResume = playbackStatus === 'paused';
     set({ isUserPlaying: true });
 
     if (selectedCue && selectedCue.type === 'audio' && activePackage && playerInstance) {
@@ -216,6 +221,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
         activePackage,
         playerInstance,
         customFs,
+        isResume,
       );
       if (!success) {
         set({ playbackStatus: 'silence' });
