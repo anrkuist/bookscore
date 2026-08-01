@@ -1990,5 +1990,16 @@
   "{{count}} chapters_many": "{{count}} capítulos",
   "{{count}} chapters_other": "{{count}} capítulos",
   "Downloading chapters…": "Descargando capítulos…",
-  "This chapter could not be downloaded.": "No se pudo descargar este capítulo."
+  "This chapter could not be downloaded.": "No se pudo descargar este capítulo.",
+  "Cue": "__STRING_NOT_TRANSLATED__",
+  "Silence": "__STRING_NOT_TRANSLATED__",
+  "No Cue": "__STRING_NOT_TRANSLATED__",
+  "Soundtrack Playing": "__STRING_NOT_TRANSLATED__",
+  "Click to enable Soundtrack Audio": "__STRING_NOT_TRANSLATED__",
+  "Soundtrack Paused": "__STRING_NOT_TRANSLATED__",
+  "Pause soundtrack": "__STRING_NOT_TRANSLATED__",
+  "Play soundtrack": "__STRING_NOT_TRANSLATED__",
+  "Playing": "__STRING_NOT_TRANSLATED__",
+  "Click Play": "__STRING_NOT_TRANSLATED__",
+  "Paused": "__STRING_NOT_TRANSLATED__"
 }

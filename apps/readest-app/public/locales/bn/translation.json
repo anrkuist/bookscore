@@ -1952,5 +1952,16 @@
   "{{count}} chapters_one": "{{count}}টি অধ্যায়",
   "{{count}} chapters_other": "{{count}}টি অধ্যায়",
   "Downloading chapters…": "অধ্যায় ডাউনলোড হচ্ছে…",
-  "This chapter could not be downloaded.": "এই অধ্যায়টি ডাউনলোড করা যায়নি।"
+  "This chapter could not be downloaded.": "এই অধ্যায়টি ডাউনলোড করা যায়নি।",
+  "Cue": "__STRING_NOT_TRANSLATED__",
+  "Silence": "__STRING_NOT_TRANSLATED__",
+  "No Cue": "__STRING_NOT_TRANSLATED__",
+  "Soundtrack Playing": "__STRING_NOT_TRANSLATED__",
+  "Click to enable Soundtrack Audio": "__STRING_NOT_TRANSLATED__",
+  "Soundtrack Paused": "__STRING_NOT_TRANSLATED__",
+  "Pause soundtrack": "__STRING_NOT_TRANSLATED__",
+  "Play soundtrack": "__STRING_NOT_TRANSLATED__",
+  "Playing": "__STRING_NOT_TRANSLATED__",
+  "Click Play": "__STRING_NOT_TRANSLATED__",
+  "Paused": "__STRING_NOT_TRANSLATED__"
 }
