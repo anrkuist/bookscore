@@ -65,7 +65,18 @@ export async function importAndAssociateBookScorePackage(
 
   try {
     // 1. Persist extracted asset audio files to app storage
+    // If package revision is already installed, deduplicate assets by checking if they exist on disk
+    const isAlreadyInstalled = Boolean(initialPackages[pkgKey]);
+    const { loadSoundtrackAssetFile } = await import('./assetStorage');
+
     for (const [assetId, bytes] of valRes.assetFiles.entries()) {
+      if (isAlreadyInstalled) {
+        const existingData = await loadSoundtrackAssetFile(fs, baseDir, pkg.packageId, assetId);
+        if (existingData) {
+          // Asset already exists on disk for this package, skip re-writing
+          continue;
+        }
+      }
       const savedPath = await saveSoundtrackAssetFile(fs, baseDir, pkg.packageId, assetId, bytes);
       writtenAssetPaths.push(savedPath);
     }
@@ -75,11 +86,19 @@ export async function importAndAssociateBookScorePackage(
     await saveInstalledPackages(fs, baseDir, updatedPackages);
 
     // 3. Create & save LocalAssociation attaching Package Revision to EPUB edition
+    // Deduplication logic: if an association already exists for this editionId AND points to this exact package revision,
+    // preserve its existing `selected` preference; otherwise default to `selected: true`.
+    const existingAssoc = initialAssociations[editionId];
+    const isSameRevision =
+      existingAssoc &&
+      existingAssoc.packageId === pkg.packageId &&
+      existingAssoc.manifestHash === pkg.manifestHash;
+
     const association: LocalAssociation = {
       editionId,
       packageId: pkg.packageId,
       manifestHash: pkg.manifestHash,
-      selected: true,
+      selected: isSameRevision ? existingAssoc.selected : true,
     };
     const updatedAssociations = { ...initialAssociations, [editionId]: association };
     await saveLocalAssociations(fs, baseDir, updatedAssociations);

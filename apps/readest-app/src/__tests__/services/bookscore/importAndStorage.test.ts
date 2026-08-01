@@ -341,4 +341,70 @@ describe('BookScore Import and Binary Storage Integration', () => {
     const currentPackages = await loadInstalledPackages(fs, baseDir);
     expect(Object.keys(currentPackages)).toEqual(['pkg-initial:hash-initial']);
   });
+
+  it('deduplicates re-imported package revision without changing existing selected preference', async () => {
+    const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
+    const { saveLocalAssociations } = await import('@/services/bookscore/persistence');
+    const mp3Bytes = createMinimalValidMp3Bytes();
+    const zipBytes = await createDevelopmentFixturePackageBytes(
+      mp3Bytes,
+      'pkg-dedupe-test',
+      'Dedupe Test Soundtrack',
+    );
+    const editionId = 'edition-dedupe-1';
+
+    // First import
+    const res1 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
+    expect(res1.success).toBe(true);
+
+    // User explicitly deselects this association
+    const assocMap = await loadLocalAssociations(fs, baseDir);
+    assocMap[editionId]!.selected = false;
+    await saveLocalAssociations(fs, baseDir, assocMap);
+
+    // Re-import identical package revision
+    const res2 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
+    expect(res2.success).toBe(true);
+
+    // Selection preference remains false
+    const finalAssocMap = await loadLocalAssociations(fs, baseDir);
+    expect(finalAssocMap[editionId]?.selected).toBe(false);
+  });
+
+  it('allows coexistence of changed-hash revisions for the same packageId', async () => {
+    const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
+    const mp3Bytes = createMinimalValidMp3Bytes();
+
+    // Import Revision 1
+    const zipBytesV1 = await createDevelopmentFixturePackageBytes(
+      mp3Bytes,
+      'pkg-coexist',
+      'Coexistence Soundtrack Rev 1',
+    );
+    const editionId = 'edition-coexist-1';
+    const res1 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytesV1, editionId);
+    expect(res1.success).toBe(true);
+    const pkg1Key = `${res1.package!.packageId}:${res1.package!.manifestHash}`;
+
+    // Import Revision 2 (different title -> different manifestHash)
+    const zipBytesV2 = await createDevelopmentFixturePackageBytes(
+      mp3Bytes,
+      'pkg-coexist',
+      'Coexistence Soundtrack Rev 2 Updated',
+    );
+    const res2 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytesV2, editionId);
+    expect(res2.success).toBe(true);
+    const pkg2Key = `${res2.package!.packageId}:${res2.package!.manifestHash}`;
+
+    expect(pkg1Key).not.toBe(pkg2Key);
+
+    // Both revisions coexist in installed packages
+    const packagesMap = await loadInstalledPackages(fs, baseDir);
+    expect(packagesMap[pkg1Key]).toBeDefined();
+    expect(packagesMap[pkg2Key]).toBeDefined();
+
+    // Association is updated to point to Revision 2
+    const assocMap = await loadLocalAssociations(fs, baseDir);
+    expect(assocMap[editionId]?.manifestHash).toBe(res2.package!.manifestHash);
+  });
 });

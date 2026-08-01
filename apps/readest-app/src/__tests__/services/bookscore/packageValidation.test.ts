@@ -336,4 +336,34 @@ describe('packageValidation', () => {
     expect(res.valid).toBe(false);
     expect(res.errors.some((e) => e.includes('does not match declared asset duration'))).toBe(true);
   });
+
+  it('rejects manifest with duplicate asset IDs', () => {
+    const invalid = {
+      ...validManifest,
+      assets: [validManifest.assets[0], validManifest.assets[0]],
+    };
+    const result = validatePackageManifest(invalid);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('Duplicate asset ID'))).toBe(true);
+  });
+
+  it('rejects manifest with duplicate cue IDs', () => {
+    const invalid = {
+      ...validManifest,
+      cues: [validManifest.cues[0], validManifest.cues[0]],
+    };
+    const result = validatePackageManifest(invalid);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('Duplicate cue ID'))).toBe(true);
+  });
+
+  it('rejects asset with unsafe path traversal in manifest', () => {
+    const invalid = {
+      ...validManifest,
+      assets: [{ ...validManifest.assets[0], path: '../unsafe.mp3' }],
+    };
+    const result = validatePackageManifest(invalid);
+    expect(result.valid).toBe(false);
+    expect(result.errors.some((e) => e.includes('path is unsafe'))).toBe(true);
+  });
 });
