@@ -126,7 +126,8 @@ describe('BookScore Import and Binary Storage Integration', () => {
   });
 
   it('atomically imports, validates, persists asset files, saves package and association, and loads into soundtrack store', async () => {
-    const assetAudioBytes = new Uint8Array([0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x80, 0xff]);
+    const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
+    const assetAudioBytes = createMinimalValidMp3Bytes();
     const zipBytes = await createDevelopmentFixturePackageBytes(
       assetAudioBytes,
       'pkg-prod-seam',
@@ -134,15 +135,8 @@ describe('BookScore Import and Binary Storage Integration', () => {
     );
 
     const editionId = 'edition-epub-prod-123';
-    const mockAudioDecoder = async () => ({ durationSec: 60 });
 
-    const importRes = await importAndAssociateBookScorePackage(
-      fs,
-      baseDir,
-      zipBytes,
-      editionId,
-      mockAudioDecoder,
-    );
+    const importRes = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
     expect(importRes.success).toBe(true);
     expect(importRes.package).toBeDefined();
     expect(importRes.association).toBeDefined();
@@ -274,5 +268,77 @@ describe('BookScore Import and Binary Storage Integration', () => {
     const asset1Path = 'soundtracks/pkg-rollback-test/asset-1.mp3';
     const asset1Exists = await fs.exists(asset1Path, baseDir);
     expect(asset1Exists).toBe(false);
+  });
+
+  it('restores original metadata on package/association persistence failure during import', async () => {
+    const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
+    const mp3Bytes = createMinimalValidMp3Bytes();
+    const zipBytes = await createDevelopmentFixturePackageBytes(mp3Bytes, 'pkg-meta-rollback');
+
+    // Pre-existing package and association state
+    const initialPkg = {
+      packageId: 'pkg-initial',
+      manifestHash: 'hash-initial',
+      installedAt: 1000,
+      manifest: {
+        packageId: 'pkg-initial',
+        title: 'Initial',
+        version: 1,
+        manifestHash: 'hash-initial',
+        editionCompatibility: [
+          { algorithm: 'readest-partial-md5-v1' as const, digest: 'd', epubByteLength: 100 },
+        ],
+        assets: [
+          {
+            id: 'a1',
+            path: 'audio/a1.mp3',
+            mimeType: 'audio/mpeg' as const,
+            hash: 'h1',
+            durationSec: 10,
+          },
+        ],
+        cues: [
+          {
+            id: 'c1',
+            startCfi: 'cfi',
+            type: 'audio' as const,
+            assetId: 'a1',
+            startSec: 0,
+            loopStartSec: 0,
+            loopEndSec: 10,
+            volume: 1,
+            crossfadeSec: 0.5,
+          },
+        ],
+      },
+    };
+    const { saveInstalledPackages } = await import('@/services/bookscore/persistence');
+    await saveInstalledPackages(fs, baseDir, { 'pkg-initial:hash-initial': initialPkg });
+
+    // Faulty FS that fails when writing associations JSON
+    const faultyFs: FileSystem = Object.assign(Object.create(fs), {
+      writeFile: async (pathStr: string, b: BaseDir, data: string | ArrayBuffer) => {
+        if (pathStr.includes('soundtrack_associations')) {
+          throw new Error('Association write failure injection');
+        }
+        return fs.writeFile(pathStr, b, data);
+      },
+    });
+
+    const mockDecoder = async () => ({ durationSec: 2.6 });
+    const res = await importAndAssociateBookScorePackage(
+      faultyFs,
+      baseDir,
+      zipBytes,
+      'edition-fail-assoc',
+      mockDecoder,
+    );
+
+    expect(res.success).toBe(false);
+    expect(res.error).toContain('rolled back cleanly');
+
+    // Verify packages map was restored to initial state (new package removed)
+    const currentPackages = await loadInstalledPackages(fs, baseDir);
+    expect(Object.keys(currentPackages)).toEqual(['pkg-initial:hash-initial']);
   });
 });

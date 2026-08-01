@@ -20,30 +20,48 @@ export type AudioDecoderFn = (audioBytes: Uint8Array) => Promise<{ durationSec: 
 export async function defaultAudioDecoder(
   audioBytes: Uint8Array,
 ): Promise<{ durationSec: number }> {
-  if (typeof window === 'undefined') {
-    return { durationSec: 60 };
+  if (typeof window !== 'undefined') {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (AudioCtx) {
+      const ctx = new AudioCtx();
+      try {
+        const buffer = await ctx.decodeAudioData(
+          audioBytes.buffer.slice(
+            audioBytes.byteOffset,
+            audioBytes.byteOffset + audioBytes.byteLength,
+          ) as ArrayBuffer,
+        );
+        const durationSec = buffer.duration;
+        await ctx.close();
+        return { durationSec };
+      } catch (err) {
+        try {
+          await ctx.close();
+        } catch (_) {}
+        throw new Error(`Audio decode failed: ${err}`);
+      }
+    }
   }
-  const AudioCtx =
-    window.AudioContext ||
-    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-  if (!AudioCtx) return { durationSec: 60 };
-  const ctx = new AudioCtx();
-  try {
-    const buffer = await ctx.decodeAudioData(
-      audioBytes.buffer.slice(
-        audioBytes.byteOffset,
-        audioBytes.byteOffset + audioBytes.byteLength,
-      ) as ArrayBuffer,
-    );
-    const durationSec = buffer.duration;
-    await ctx.close();
-    return { durationSec };
-  } catch (err) {
-    try {
-      await ctx.close();
-    } catch (_) {}
-    throw new Error(`Audio decode failed: ${err}`);
+
+  // Fallback for Node / headless environments without Web Audio API:
+  // Estimate MP3 duration from frame sync headers (417 bytes per frame at 128 kbps 44.1 kHz = ~26.12ms)
+  let mp3FrameCount = 0;
+  for (let i = 0; i <= audioBytes.length - 4; i++) {
+    const b0 = audioBytes[i];
+    const b1 = audioBytes[i + 1];
+    if (b0 === 0xff && b1 !== undefined && (b1 & 0xe0) === 0xe0) {
+      mp3FrameCount++;
+      i += 416;
+    }
   }
+  if (mp3FrameCount > 0) {
+    const durationSec = (mp3FrameCount * 1152) / 44100;
+    return { durationSec: Math.round(durationSec * 10) / 10 };
+  }
+
+  return { durationSec: 60 };
 }
 
 export async function sha256Hex(buffer: ArrayBuffer | Uint8Array): Promise<string> {

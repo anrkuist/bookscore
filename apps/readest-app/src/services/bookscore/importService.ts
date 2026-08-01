@@ -17,9 +17,28 @@ export type ImportAndAssociateResult = {
 };
 
 /**
+ * Creates a minimal valid, decodable MPEG-1 Layer III (MP3) audio byte sequence (~2.6 seconds at 44.1 kHz).
+ */
+export function createMinimalValidMp3Bytes(): Uint8Array {
+  const frameHeader = [0xff, 0xfb, 0x90, 0x64];
+  const frameLength = 417;
+  const numFrames = 100;
+  const totalLength = frameLength * numFrames;
+  const bytes = new Uint8Array(totalLength);
+
+  for (let i = 0; i < numFrames; i++) {
+    const offset = i * frameLength;
+    bytes.set(frameHeader, offset);
+  }
+  return bytes;
+}
+
+/**
  * Atomically validates a .bookscore package archive, persists its asset files to app storage,
  * updates soundtrack_packages.json with the InstalledPackage, and creates/saves a LocalAssociation
  * attaching the exact Package Revision to the EPUB edition.
+ *
+ * If any step fails, performs a full transaction rollback (removing written asset files and restoring initial packages & associations metadata).
  */
 export async function importAndAssociateBookScorePackage(
   fs: FileSystem,
@@ -37,31 +56,33 @@ export async function importAndAssociateBookScorePackage(
   }
 
   const pkg = valRes.package;
+  const pkgKey = `${pkg.packageId}:${pkg.manifestHash}`;
   const writtenAssetPaths: string[] = [];
 
+  // Snapshot initial metadata state for atomic transaction rollback
+  const initialPackages = await loadInstalledPackages(fs, baseDir);
+  const initialAssociations = await loadLocalAssociations(fs, baseDir);
+
   try {
-    // Persist extracted asset audio files to app storage
+    // 1. Persist extracted asset audio files to app storage
     for (const [assetId, bytes] of valRes.assetFiles.entries()) {
       const savedPath = await saveSoundtrackAssetFile(fs, baseDir, pkg.packageId, assetId, bytes);
       writtenAssetPaths.push(savedPath);
     }
 
-    // Save InstalledPackage to soundtrack_packages.json
-    const existingPackages = await loadInstalledPackages(fs, baseDir);
-    const pkgKey = `${pkg.packageId}:${pkg.manifestHash}`;
-    existingPackages[pkgKey] = pkg;
-    await saveInstalledPackages(fs, baseDir, existingPackages);
+    // 2. Save InstalledPackage to soundtrack_packages.json
+    const updatedPackages = { ...initialPackages, [pkgKey]: pkg };
+    await saveInstalledPackages(fs, baseDir, updatedPackages);
 
-    // Create & save LocalAssociation attaching Package Revision to EPUB edition
-    const existingAssociations = await loadLocalAssociations(fs, baseDir);
+    // 3. Create & save LocalAssociation attaching Package Revision to EPUB edition
     const association: LocalAssociation = {
       editionId,
       packageId: pkg.packageId,
       manifestHash: pkg.manifestHash,
       selected: true,
     };
-    existingAssociations[editionId] = association;
-    await saveLocalAssociations(fs, baseDir, existingAssociations);
+    const updatedAssociations = { ...initialAssociations, [editionId]: association };
+    await saveLocalAssociations(fs, baseDir, updatedAssociations);
 
     return {
       success: true,
@@ -69,7 +90,7 @@ export async function importAndAssociateBookScorePackage(
       association,
     };
   } catch (err) {
-    // Transaction Rollback: Clean up any partially written asset files on disk
+    // Transaction Rollback: Clean up written asset files and restore original metadata
     for (const filePath of writtenAssetPaths) {
       try {
         if ('deleteFile' in fs && typeof fs.deleteFile === 'function') {
@@ -85,6 +106,15 @@ export async function importAndAssociateBookScorePackage(
         }
       } catch (_) {}
     }
+
+    try {
+      await saveInstalledPackages(fs, baseDir, initialPackages);
+    } catch (_) {}
+
+    try {
+      await saveLocalAssociations(fs, baseDir, initialAssociations);
+    } catch (_) {}
+
     return {
       success: false,
       error: `Import failed and rolled back cleanly: ${err}`,
@@ -93,10 +123,10 @@ export async function importAndAssociateBookScorePackage(
 }
 
 /**
- * Helper to build a valid binary .bookscore ZIP package archive for testing and development.
+ * Helper to build a valid binary .bookscore ZIP package archive with decodable MP3 audio for testing and development.
  */
 export async function createDevelopmentFixturePackageBytes(
-  assetAudioBytes: Uint8Array,
+  assetAudioBytes?: Uint8Array,
   packageId = 'pkg-dev-fixture',
   title = 'Development EPUB Soundtrack',
 ): Promise<Uint8Array> {
@@ -104,7 +134,8 @@ export async function createDevelopmentFixturePackageBytes(
     '@zip.js/zip.js'
   );
 
-  const assetHash = await sha256Hex(assetAudioBytes);
+  const audioBytes = assetAudioBytes ?? createMinimalValidMp3Bytes();
+  const assetHash = await sha256Hex(audioBytes);
 
   const manifestObj = {
     packageId,
@@ -124,7 +155,7 @@ export async function createDevelopmentFixturePackageBytes(
         path: 'audio/main.mp3',
         mimeType: 'audio/mpeg' as const,
         hash: assetHash,
-        durationSec: 60,
+        durationSec: 2.6,
       },
     ],
     cues: [
@@ -134,10 +165,10 @@ export async function createDevelopmentFixturePackageBytes(
         type: 'audio' as const,
         assetId: 'asset-main',
         startSec: 0,
-        loopStartSec: 5,
-        loopEndSec: 55,
+        loopStartSec: 0.2,
+        loopEndSec: 2.4,
         volume: 0.9,
-        crossfadeSec: 1.0,
+        crossfadeSec: 0.5,
       },
     ],
   };
@@ -150,14 +181,14 @@ export async function createDevelopmentFixturePackageBytes(
 
   const zipWriter = new ZipWriter(new Uint8ArrayWriter());
   await zipWriter.add('manifest.json', new TextReader(JSON.stringify(manifestObj)));
-  await zipWriter.add('audio/main.mp3', new Uint8ArrayReader(assetAudioBytes));
+  await zipWriter.add('audio/main.mp3', new Uint8ArrayReader(audioBytes));
   return zipWriter.close();
 }
 
 /**
  * Production Desktop helper: Ensures a validated Milestone 1 EPUB soundtrack package
  * and Local Association are installed and associated on disk for the current edition.
- * If no association exists yet for editionId, imports the validated fixture package.
+ * Runs the production defaultAudioDecoder.
  */
 export async function ensureBookScoreFixtureInstalled(
   fs: FileSystem,
@@ -171,19 +202,14 @@ export async function ensureBookScoreFixtureInstalled(
   let associations = await loadLocalAssociations(fs, baseDir);
 
   if (!associations[editionId]) {
-    const sampleAudioBytes = new Uint8Array([0x49, 0x44, 0x33, 0x03, 0x00, 0x00, 0x00, 0x00]);
+    const mp3Bytes = createMinimalValidMp3Bytes();
     const zipBytes = await createDevelopmentFixturePackageBytes(
-      sampleAudioBytes,
+      mp3Bytes,
       'pkg-m1-fixture',
       'Milestone 1 EPUB Soundtrack',
     );
-    const importRes = await importAndAssociateBookScorePackage(
-      fs,
-      baseDir,
-      zipBytes,
-      editionId,
-      async () => ({ durationSec: 60 }),
-    );
+    // Run production import using defaultAudioDecoder
+    const importRes = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
     if (importRes.success) {
       packages = await loadInstalledPackages(fs, baseDir);
       associations = await loadLocalAssociations(fs, baseDir);

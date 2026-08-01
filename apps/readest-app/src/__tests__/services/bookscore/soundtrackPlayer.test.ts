@@ -126,4 +126,16 @@ describe('WebAudioSoundtrackPlayer', () => {
     // Verify playback resumed at saved offset 20 instead of initial startSec 5
     expect(secondSource.start).toHaveBeenCalledWith(25, 20);
   });
+
+  it('decodes provided binary audio buffer via decodeAudioData before playback', async () => {
+    const fakeCtx = new FakeAudioContext();
+    fakeCtx.state = 'running';
+    const player = new WebAudioSoundtrackPlayer(fakeCtx);
+
+    const testAudioBuffer = new Uint8Array([0xff, 0xfb, 0x90, 0x64]).buffer;
+    await player.playCue(sampleCue, testAudioBuffer);
+
+    expect(fakeCtx.decodeAudioData).toHaveBeenCalledWith(testAudioBuffer);
+    expect(fakeCtx.createBufferSource).toHaveBeenCalled();
+  });
 });
