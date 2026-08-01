@@ -342,7 +342,7 @@ describe('BookScore Import and Binary Storage Integration', () => {
     expect(Object.keys(currentPackages)).toEqual(['pkg-initial:hash-initial']);
   });
 
-  it('deduplicates re-imported package revision without changing existing selected preference', async () => {
+  it('deduplicates re-imported package revision without mutating stored installedAt or package record', async () => {
     const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
     const { saveLocalAssociations } = await import('@/services/bookscore/persistence');
     const mp3Bytes = createMinimalValidMp3Bytes();
@@ -356,22 +356,27 @@ describe('BookScore Import and Binary Storage Integration', () => {
     // First import
     const res1 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
     expect(res1.success).toBe(true);
+    const originalInstalledAt = res1.package!.installedAt;
 
     // User explicitly deselects this association
     const assocMap = await loadLocalAssociations(fs, baseDir);
     assocMap[editionId]!.selected = false;
     await saveLocalAssociations(fs, baseDir, assocMap);
 
-    // Re-import identical package revision
+    // Re-import identical package revision after delay
+    await new Promise((r) => setTimeout(r, 10));
     const res2 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
     expect(res2.success).toBe(true);
+
+    // InstalledPackage record is retained unchanged (installedAt not mutated)
+    expect(res2.package!.installedAt).toBe(originalInstalledAt);
 
     // Selection preference remains false
     const finalAssocMap = await loadLocalAssociations(fs, baseDir);
     expect(finalAssocMap[editionId]?.selected).toBe(false);
   });
 
-  it('allows coexistence of changed-hash revisions for the same packageId', async () => {
+  it('allows coexistence of changed-hash revisions and retains addressable associations for both', async () => {
     const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
     const mp3Bytes = createMinimalValidMp3Bytes();
 
@@ -403,8 +408,76 @@ describe('BookScore Import and Binary Storage Integration', () => {
     expect(packagesMap[pkg1Key]).toBeDefined();
     expect(packagesMap[pkg2Key]).toBeDefined();
 
-    // Association is updated to point to Revision 2
+    // Associations for both revisions coexist and remain addressable
     const assocMap = await loadLocalAssociations(fs, baseDir);
+    const rev1AssocKey = `${editionId}:${res1.package!.packageId}:${res1.package!.manifestHash}`;
+    const rev2AssocKey = `${editionId}:${res2.package!.packageId}:${res2.package!.manifestHash}`;
+
+    expect(assocMap[rev1AssocKey]).toBeDefined();
+    expect(assocMap[rev1AssocKey]?.selected).toBe(false);
+    expect(assocMap[rev2AssocKey]).toBeDefined();
+    expect(assocMap[rev2AssocKey]?.selected).toBe(true);
     expect(assocMap[editionId]?.manifestHash).toBe(res2.package!.manifestHash);
+  });
+
+  it('namespaces asset storage by revision and preserves existing revision assets on failed rollback of a new revision', async () => {
+    const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
+    const { loadSoundtrackAssetFile } = await import('@/services/bookscore/assetStorage');
+    const mp3BytesV1 = createMinimalValidMp3Bytes();
+    const mp3BytesV2 = new Uint8Array([...mp3BytesV1, 0xff, 0xfb, 0x90, 0x64]); // Different bytes
+
+    const packageId = 'pkg-namespaced-rollback';
+    const editionId = 'edition-rollback-ns';
+
+    // Import Revision 1 successfully
+    const zipBytesV1 = await createDevelopmentFixturePackageBytes(
+      mp3BytesV1,
+      packageId,
+      'Namespaced Rev 1',
+    );
+    const res1 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytesV1, editionId);
+    expect(res1.success).toBe(true);
+    const hash1 = res1.package!.manifestHash;
+
+    // Verify Revision 1 asset is readable
+    const asset1Buffer = await loadSoundtrackAssetFile(fs, baseDir, packageId, 'asset-main', hash1);
+    expect(asset1Buffer).not.toBeNull();
+
+    // Build Revision 2 zip bytes
+    const zipBytesV2 = await createDevelopmentFixturePackageBytes(
+      mp3BytesV2,
+      packageId,
+      'Namespaced Rev 2',
+    );
+
+    // Faulty FS that fails when saving soundtrack_packages.json on Revision 2
+    const faultyFs: FileSystem = Object.assign(Object.create(fs), {
+      writeFile: async (pathStr: string, b: BaseDir, data: string | ArrayBuffer) => {
+        if (pathStr.includes('soundtrack_packages')) {
+          throw new Error('Disk error during soundtrack_packages write');
+        }
+        return fs.writeFile(pathStr, b, data);
+      },
+    });
+
+    const res2 = await importAndAssociateBookScorePackage(
+      faultyFs,
+      baseDir,
+      zipBytesV2,
+      editionId,
+      async () => ({ durationSec: 2.6 }),
+    );
+    expect(res2.success).toBe(false);
+
+    // Verify Revision 1's asset is still intact and readable on disk!
+    const asset1StillExists = await loadSoundtrackAssetFile(
+      fs,
+      baseDir,
+      packageId,
+      'asset-main',
+      hash1,
+    );
+    expect(asset1StillExists).not.toBeNull();
+    expect(new Uint8Array(asset1StillExists!)).toEqual(mp3BytesV1);
   });
 });

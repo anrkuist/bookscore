@@ -61,7 +61,7 @@ export async function defaultAudioDecoder(
     return { durationSec: Math.round(durationSec * 10) / 10 };
   }
 
-  return { durationSec: 60 };
+  throw new Error('Invalid or undecodable MP3 audio bytes');
 }
 
 export async function sha256Hex(buffer: ArrayBuffer | Uint8Array): Promise<string> {
