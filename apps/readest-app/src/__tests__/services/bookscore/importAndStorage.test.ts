@@ -414,7 +414,7 @@ describe('BookScore Import and Binary Storage Integration', () => {
     const rev2AssocKey = `${editionId}:${res2.package!.packageId}:${res2.package!.manifestHash}`;
 
     expect(assocMap[rev1AssocKey]).toBeDefined();
-    expect(assocMap[rev1AssocKey]?.selected).toBe(false);
+    expect(assocMap[rev1AssocKey]?.selected).toBe(true);
     expect(assocMap[rev2AssocKey]).toBeDefined();
     expect(assocMap[rev2AssocKey]?.selected).toBe(true);
     expect(assocMap[editionId]?.manifestHash).toBe(res2.package!.manifestHash);

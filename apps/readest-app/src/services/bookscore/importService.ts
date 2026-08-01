@@ -105,7 +105,7 @@ export async function importAndAssociateBookScorePackage(
     }
 
     // 3. Create & save LocalAssociation attaching Package Revision to EPUB edition.
-    // Retain existing revision associations so multiple revisions coexist.
+    // Retain existing revision associations unchanged so multiple revisions coexist without mutating prior state.
     const revisionAssocKey = `${editionId}:${pkg.packageId}:${pkg.manifestHash}`;
     const existingRevisionAssoc = initialAssociations[revisionAssocKey];
     const existingEditionAssoc = initialAssociations[editionId];
@@ -125,20 +125,11 @@ export async function importAndAssociateBookScorePackage(
       selected: targetSelected,
     };
 
-    // Update all previous associations for this editionId so that if targetSelected is true,
-    // previous revisions are updated to selected: false while remaining stored and addressable.
-    const updatedAssociations = { ...initialAssociations };
-    for (const [key, assoc] of Object.entries(updatedAssociations)) {
-      if (
-        assoc.editionId === editionId &&
-        (assoc.packageId !== pkg.packageId || assoc.manifestHash !== pkg.manifestHash)
-      ) {
-        updatedAssociations[key] = { ...assoc, selected: false };
-      }
-    }
-
-    updatedAssociations[revisionAssocKey] = association;
-    updatedAssociations[editionId] = association;
+    const updatedAssociations = {
+      ...initialAssociations,
+      [revisionAssocKey]: association,
+      [editionId]: association,
+    };
     await saveLocalAssociations(fs, baseDir, updatedAssociations);
 
     return {
