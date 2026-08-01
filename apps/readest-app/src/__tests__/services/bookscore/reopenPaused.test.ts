@@ -132,4 +132,26 @@ describe('Reopen-Selected-But-Paused Semantics & Capability Gating', () => {
     expect(state.capabilityEnabled).toBe(false);
     expect(state.playbackStatus).toBe('silence');
   });
+
+  it('ignores stale or duplicate location reports without silencing valid ongoing playback state', () => {
+    const store = useSoundtrackStore.getState();
+    store.setCapabilityEnabled(true);
+    store.loadSoundtrackForBook(
+      'lotr-edition-1',
+      packagesMap,
+      associationsMap,
+      'epubcfi(/6/2!/4/2:0)',
+    );
+
+    // Initial valid report seq=1
+    store.reportLocation({ seq: 1, kind: 'resolved', cfi: 'epubcfi(/6/2!/4/2:0)' });
+    expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-shire');
+
+    // Duplicate report seq=1 (e.g. repeated Foliate relocate event)
+    store.reportLocation({ seq: 1, kind: 'resolved', cfi: 'epubcfi(/6/2!/4/2:0)' });
+
+    // Verify current cue and playback state are preserved (NOT silenced)
+    expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-shire');
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('paused');
+  });
 });

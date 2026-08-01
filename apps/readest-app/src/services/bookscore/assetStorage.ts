@@ -5,7 +5,7 @@ export function getAssetFilePath(packageId: string, assetId: string): string {
 }
 
 /**
- * Persists an asset audio file to app storage.
+ * Persists an asset audio file to app storage as binary data without string/UTF-8 corruption.
  */
 export async function saveSoundtrackAssetFile(
   fs: FileSystem,
@@ -16,9 +16,11 @@ export async function saveSoundtrackAssetFile(
 ): Promise<string> {
   const path = getAssetFilePath(packageId, assetId);
   try {
-    // Write array buffer / bytes to storage file
-    const binaryString = String.fromCharCode(...bytes);
-    await fs.writeFile(path, baseDir, binaryString);
+    const arrayBuffer = bytes.buffer.slice(
+      bytes.byteOffset,
+      bytes.byteOffset + bytes.byteLength,
+    ) as ArrayBuffer;
+    await fs.writeFile(path, baseDir, arrayBuffer);
     return path;
   } catch (err) {
     console.error(`Failed to save soundtrack asset file ${path}:`, err);
@@ -27,7 +29,7 @@ export async function saveSoundtrackAssetFile(
 }
 
 /**
- * Loads an asset audio file from app storage as an ArrayBuffer.
+ * Loads an asset audio file from app storage as an ArrayBuffer in binary mode.
  */
 export async function loadSoundtrackAssetFile(
   fs: FileSystem,
@@ -37,14 +39,37 @@ export async function loadSoundtrackAssetFile(
 ): Promise<ArrayBuffer | null> {
   const path = getAssetFilePath(packageId, assetId);
   try {
-    const data = await fs.readFile(path, baseDir, 'text');
-    if (!data || typeof data !== 'string') return null;
-    const len = data.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) {
-      bytes[i] = data.charCodeAt(i);
+    const data = await fs.readFile(path, baseDir, 'binary');
+    if (!data) return null;
+
+    if (data instanceof ArrayBuffer || data?.constructor?.name === 'ArrayBuffer') {
+      return data as ArrayBuffer;
     }
-    return bytes.buffer;
+
+    if (
+      ArrayBuffer.isView(data) ||
+      (typeof data === 'object' && data !== null && 'buffer' in data)
+    ) {
+      const view = data as unknown as {
+        buffer: ArrayBuffer;
+        byteOffset?: number;
+        byteLength?: number;
+      };
+      const offset = view.byteOffset ?? 0;
+      const length = view.byteLength ?? view.buffer.byteLength;
+      return view.buffer.slice(offset, offset + length);
+    }
+
+    if (typeof data === 'string') {
+      const len = data.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bytes[i] = data.charCodeAt(i) & 0xff;
+      }
+      return bytes.buffer;
+    }
+
+    return null;
   } catch (err) {
     console.info(`Soundtrack asset file ${path} not found or unreadable:`, err);
     return null;

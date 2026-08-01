@@ -32,6 +32,7 @@ import { WebAudioSoundtrackPlayer } from '@/services/bookscore/soundtrackPlayer'
 import { loadInstalledPackages, loadLocalAssociations } from '@/services/bookscore/persistence';
 import { getInitializedAppService } from '@/services/environment';
 import { getBookProgress } from '@/store/readerProgressStore';
+import { isBookScoreCapabilityEnabled } from '@/services/bookscore/capability';
 import type { FileSystem } from '@/types/system';
 import {
   applyFixedlayoutStyles,
@@ -284,9 +285,11 @@ const FoliateViewer: React.FC<{
   }, [cancelRelocateScheduled, commitRelocate]);
 
   useEffect(() => {
-    if (isTauriAppPlatform() && !appService?.isMobile) {
-      const store = useSoundtrackStore.getState();
-      store.setCapabilityEnabled(true);
+    const isEnabled = isBookScoreCapabilityEnabled({ isMobile: appService?.isMobile });
+    const store = useSoundtrackStore.getState();
+    store.setCapabilityEnabled(isEnabled);
+
+    if (isEnabled) {
       store.registerSoundtrackPlayer(new WebAudioSoundtrackPlayer());
       const editionId = bookKey.split('-')[0]!;
       const savedProgress = getBookProgress(bookKey);
@@ -306,9 +309,7 @@ const FoliateViewer: React.FC<{
       }
     }
     return () => {
-      if (isTauriAppPlatform()) {
-        useSoundtrackStore.getState().resetSoundtrack();
-      }
+      useSoundtrackStore.getState().resetSoundtrack();
     };
   }, [bookKey, appService?.isMobile]);
 

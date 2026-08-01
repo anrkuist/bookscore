@@ -15,6 +15,37 @@ export type ArchiveValidationResult = ValidationResult & {
   assetFiles?: Map<string, Uint8Array>;
 };
 
+export type AudioDecoderFn = (audioBytes: Uint8Array) => Promise<{ durationSec: number }>;
+
+export async function defaultAudioDecoder(
+  audioBytes: Uint8Array,
+): Promise<{ durationSec: number }> {
+  if (typeof window === 'undefined') {
+    return { durationSec: 60 };
+  }
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtx) return { durationSec: 60 };
+  const ctx = new AudioCtx();
+  try {
+    const buffer = await ctx.decodeAudioData(
+      audioBytes.buffer.slice(
+        audioBytes.byteOffset,
+        audioBytes.byteOffset + audioBytes.byteLength,
+      ) as ArrayBuffer,
+    );
+    const durationSec = buffer.duration;
+    await ctx.close();
+    return { durationSec };
+  } catch (err) {
+    try {
+      await ctx.close();
+    } catch (_) {}
+    throw new Error(`Audio decode failed: ${err}`);
+  }
+}
+
 export async function sha256Hex(buffer: ArrayBuffer | Uint8Array): Promise<string> {
   const view = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
   const hashBuffer = await crypto.subtle.digest('SHA-256', view.buffer as ArrayBuffer);
@@ -188,10 +219,11 @@ type EntryWithGetData = {
 /**
  * Validates a .bookscore ZIP archive by inspecting archive entries,
  * enforcing path safety, verifying manifest syntax/semantics, asset file presence,
- * and checking SHA-256 checksums of declared assets.
+ * checking SHA-256 checksums, and runtime-decoding asset audio files.
  */
 export async function validateBookScorePackageArchive(
   archiveBytes: Uint8Array,
+  audioDecoder: AudioDecoderFn = defaultAudioDecoder,
 ): Promise<ArchiveValidationResult> {
   const errors: string[] = [];
   try {
@@ -268,6 +300,18 @@ export async function validateBookScorePackageArchive(
         errors.push(
           `Asset ${asset.id} SHA-256 hash mismatch (expected ${asset.hash}, got ${computedAssetHash})`,
         );
+        continue;
+      }
+
+      // Runtime audio decoding verification
+      try {
+        const decoded = await audioDecoder(assetBytes);
+        if (!decoded || typeof decoded.durationSec !== 'number' || decoded.durationSec <= 0) {
+          errors.push(`Asset ${asset.id} decoded duration is invalid`);
+          continue;
+        }
+      } catch (decodeErr) {
+        errors.push(`Asset ${asset.id} runtime audio decoding failed: ${decodeErr}`);
         continue;
       }
 

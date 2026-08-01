@@ -54,15 +54,37 @@ class NodeTestFileSystem {
     await fsPromises.copyFile(src, dst);
   }
 
-  async readFile(pathStr: string, _base: BaseDir, _format: 'text'): Promise<string> {
+  async readFile(
+    pathStr: string,
+    _base: BaseDir,
+    mode?: 'text' | 'binary',
+  ): Promise<string | ArrayBuffer> {
     const fullPath = path.join(this.rootDir, pathStr);
+    if (mode === 'binary') {
+      const buf = await fsPromises.readFile(fullPath);
+      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+    }
     return fsPromises.readFile(fullPath, 'utf8');
   }
 
-  async writeFile(pathStr: string, _base: BaseDir, data: string): Promise<void> {
+  async writeFile(
+    pathStr: string,
+    _base: BaseDir,
+    data: string | ArrayBuffer | Uint8Array,
+  ): Promise<void> {
     const fullPath = path.join(this.rootDir, pathStr);
     await fsPromises.mkdir(path.dirname(fullPath), { recursive: true });
-    await fsPromises.writeFile(fullPath, data, 'utf8');
+    if (typeof data === 'string') {
+      await fsPromises.writeFile(fullPath, data, 'utf8');
+    } else if (data instanceof ArrayBuffer || data?.constructor?.name === 'ArrayBuffer') {
+      await fsPromises.writeFile(fullPath, Buffer.from(data as ArrayBuffer));
+    } else {
+      const view = data as unknown as Uint8Array;
+      await fsPromises.writeFile(
+        fullPath,
+        Buffer.from(view.buffer, view.byteOffset, view.byteLength),
+      );
+    }
   }
 
   async exists(pathStr: string, _base: BaseDir): Promise<boolean> {

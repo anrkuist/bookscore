@@ -41,6 +41,7 @@ export interface SoundtrackPlayer {
   transitionToSilence(crossfadeSec?: number): Promise<void>;
   pause(): void;
   stop(): void;
+  dispose(): Promise<void>;
   getCurrentCue(): AudioCue | null;
   getSavedOffset(cueId: string): number | undefined;
 }
@@ -241,6 +242,22 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
     this.pause();
     this.currentCue = null;
     this.savedOffsets.clear();
+  }
+
+  public async dispose(): Promise<void> {
+    this.stop();
+    if (this.masterGain) {
+      try {
+        this.masterGain.disconnect();
+      } catch (_) {}
+      this.masterGain = null;
+    }
+    if (this.ctx && this.ctx.state !== 'closed') {
+      try {
+        await this.ctx.close();
+      } catch (_) {}
+      this.ctx = null;
+    }
   }
 
   public getCurrentCue(): AudioCue | null {

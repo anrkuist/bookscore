@@ -158,4 +158,66 @@ describe('packageValidation', () => {
     expect(res.valid).toBe(false);
     expect(res.errors.some((e) => e.includes('Unsafe ZIP entry path'))).toBe(true);
   });
+
+  it('rejects package archive when asset audio fails runtime decoding despite matching hash', async () => {
+    const { ZipWriter, Uint8ArrayWriter, Uint8ArrayReader, TextReader } = await import(
+      '@zip.js/zip.js'
+    );
+
+    const corruptAssetBytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+    const assetHash = await sha256Hex(corruptAssetBytes);
+
+    const manifestObj = {
+      packageId: 'pkg-corrupt-asset',
+      title: 'Corrupt Asset Package',
+      version: 1,
+      manifestHash: '',
+      editionCompatibility: [
+        {
+          algorithm: 'readest-partial-md5-v1',
+          digest: 'md5digest',
+          epubByteLength: 10000,
+        },
+      ],
+      assets: [
+        {
+          id: 'corrupt-track',
+          path: 'audio/corrupt.mp3',
+          mimeType: 'audio/mpeg',
+          hash: assetHash,
+          durationSec: 30,
+        },
+      ],
+      cues: [
+        {
+          id: 'cue-corrupt',
+          startCfi: 'epubcfi(/6/2!/4/2:0)',
+          type: 'audio',
+          assetId: 'corrupt-track',
+          startSec: 0,
+          loopStartSec: 0,
+          loopEndSec: 20,
+          volume: 1,
+          crossfadeSec: 0.5,
+        },
+      ],
+    };
+
+    const encoder = new TextEncoder();
+    const manifestText = JSON.stringify(manifestObj, null, 2);
+    manifestObj.manifestHash = await sha256Hex(encoder.encode(manifestText));
+
+    const zipWriter = new ZipWriter(new Uint8ArrayWriter());
+    await zipWriter.add('manifest.json', new TextReader(JSON.stringify(manifestObj)));
+    await zipWriter.add('audio/corrupt.mp3', new Uint8ArrayReader(corruptAssetBytes));
+    const zipArchiveBytes = await zipWriter.close();
+
+    const failingDecoder = async () => {
+      throw new Error('Corrupt MP3 header');
+    };
+
+    const res = await validateBookScorePackageArchive(zipArchiveBytes, failingDecoder);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some((e) => e.includes('runtime audio decoding failed'))).toBe(true);
+  });
 });

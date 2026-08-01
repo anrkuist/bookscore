@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { useSoundtrackStore } from '@/store/soundtrackStore';
-import { isTauriAppPlatform } from '@/services/environment';
+import { isBookScoreCapabilityEnabled } from '@/services/bookscore/capability';
 import { useTranslation } from '@/hooks/useTranslation';
 
 export interface SoundtrackControlProps {
@@ -18,8 +18,8 @@ export const SoundtrackControl: React.FC<SoundtrackControlProps> = ({ isMobile }
   const togglePlayPause = useSoundtrackStore((s) => s.togglePlayPause);
 
   // Gating check: Web, iOS, Android remain healthy and show no soundtrack controls
-  const isDesktop = isTauriAppPlatform() && !isMobile;
-  if (!isDesktop || !capabilityEnabled || !activePackage) {
+  const isEnabled = capabilityEnabled && isBookScoreCapabilityEnabled({ isMobile });
+  if (!isEnabled || !activePackage) {
     return null;
   }
 

@@ -153,10 +153,8 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     const res = locationSeam.processReport(report, activePackage.manifest.cues);
 
     if (res.isStaleOrDuplicate) {
-      if (playerInstance) {
-        playerInstance.transitionToSilence();
-      }
-      set({ selectedCue: null, playbackStatus: 'silence' });
+      // Stale or duplicate reports are ignored so duplicate relocate events
+      // do not interrupt ongoing valid playback.
       return;
     }
 
@@ -246,7 +244,8 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   resetSoundtrack: () => {
     locationSeam.reset();
     if (playerInstance) {
-      playerInstance.stop();
+      void playerInstance.dispose();
+      playerInstance = null;
     }
     set({
       activePackage: null,
