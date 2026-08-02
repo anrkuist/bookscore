@@ -177,6 +177,58 @@ describe('soundtrackStore issue #15 enhancements', () => {
     expect(dispatchSpy).not.toHaveBeenCalledWith('tts-stop', expect.anything());
   });
 
+  it('preserves playbackStatus as silence when pause is called during a Quiet/Silence scene', () => {
+    const fakePlayer = new FakeSoundtrackPlayer();
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore.getState().registerSoundtrackPlayer(fakePlayer);
+
+    const silenceCue: SilenceCue = {
+      id: 'cue-silence',
+      startCfi: 'epubcfi(/6/2!/4/2)',
+      type: 'silence',
+    };
+
+    const silencePkg: InstalledPackage = {
+      packageId: 'pkg-silence',
+      manifestHash: 'hash-silence',
+      installedAt: Date.now(),
+      manifest: {
+        packageId: 'pkg-silence',
+        title: 'Silence Package',
+        version: 1,
+        manifestHash: 'hash-silence',
+        editionCompatibility: [],
+        assets: [],
+        cues: [silenceCue],
+      },
+    };
+
+    const assoc: LocalAssociation = {
+      editionId: 'ed-silence',
+      packageId: 'pkg-silence',
+      manifestHash: 'hash-silence',
+      selected: true,
+      trustState: 'verified',
+    };
+
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'ed-silence',
+        { 'pkg-silence:hash-silence': silencePkg },
+        { 'ed-silence': assoc },
+      );
+
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
+
+    // Call pause() (e.g. when starting TTS)
+    useSoundtrackStore.getState().pause();
+
+    // Assert status remains silence instead of changing to paused
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
+    expect(fakePlayer.pause).toHaveBeenCalled();
+  });
+
   it('does NOT stop TTS and falls back to silence if audio asset resolution or playCue fails', async () => {
     const fakePlayer = new FakeSoundtrackPlayer();
     fakePlayer.playCue.mockRejectedValue(new Error('Audio decoding failed'));

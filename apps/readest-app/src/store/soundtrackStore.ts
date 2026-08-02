@@ -299,7 +299,10 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   },
 
   pause: () => {
-    set({ isUserPlaying: false, playbackStatus: 'paused' });
+    const { selectedCue, playbackStatus } = get();
+    const isAudioCue = selectedCue && selectedCue.type === 'audio';
+    const nextStatus = isAudioCue && playbackStatus !== 'silence' ? 'paused' : 'silence';
+    set({ isUserPlaying: false, playbackStatus: nextStatus });
     if (playerInstance) {
       playerInstance.pause();
     }
