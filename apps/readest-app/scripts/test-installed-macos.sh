@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 #
 # BookScore macOS validation-harness slice
-# Runs tests outside of the Next.js dev server, utilizing the compiled/packaged
-# app's static files and embedded WebDriver server.
+# Runs tests against a compiled macOS app shell with embedded WebDriver server,
+# testing Tauri IPC, native window host, and Web Audio decoder capabilities outside dev server.
+# Note: Uses an unsigned debug build (`--features webdriver --bundles app --no-sign`)
+# and executes test specs in a Vitest browser iframe connected to port 4445.
 #
 set -euo pipefail
 

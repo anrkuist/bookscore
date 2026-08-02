@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { WebAudioSoundtrackPlayer } from '@/services/bookscore/soundtrackPlayer';
 import { defaultAudioDecoder } from '@/services/bookscore/packageValidation';
 import {
@@ -43,6 +43,18 @@ describe('Tauri WebView BookScore Validation', () => {
   // 2. Player Integration (Loops, Transitions, Pause/Resume, Cleanup, Silence failures)
   describe('Soundtrack Player playback logic', () => {
     // Create a helper to instantiate the player with a wrapped/spied context
+    interface TrackedSource {
+      src: AudioBufferSourceNode;
+      stopSpy: ReturnType<typeof vi.fn>;
+      disconnectSpy: ReturnType<typeof vi.fn>;
+    }
+
+    interface TrackedGain {
+      gainNode: GainNode;
+      setValueSpy: ReturnType<typeof vi.fn>;
+      rampSpy: ReturnType<typeof vi.fn>;
+    }
+
     function createSpiedPlayer() {
       const AudioCtx =
         window.AudioContext || (window as unknown as WebkitWindow).webkitAudioContext;
@@ -52,6 +64,8 @@ describe('Tauri WebView BookScore Validation', () => {
 
       const realCtx = new AudioCtx();
       let lastCreatedSource: AudioBufferSourceNode | null = null;
+      const createdSources: TrackedSource[] = [];
+      const createdGains: TrackedGain[] = [];
 
       // Wrap AudioContext to intercept source node creation and monitor loops/playback
       const wrappedCtx = {
@@ -70,13 +84,22 @@ describe('Tauri WebView BookScore Validation', () => {
           await realCtx.close();
           wrappedCtx.state = realCtx.state;
         },
-        createGain: () => realCtx.createGain(),
+        createGain: () => {
+          const g = realCtx.createGain();
+          const setValueSpy = vi.spyOn(g.gain, 'setValueAtTime');
+          const rampSpy = vi.spyOn(g.gain, 'linearRampToValueAtTime');
+          createdGains.push({ gainNode: g, setValueSpy, rampSpy });
+          return g;
+        },
         createBuffer: (channels: number, len: number, rate: number) =>
           realCtx.createBuffer(channels, len, rate),
         decodeAudioData: (buf: ArrayBuffer) => realCtx.decodeAudioData(buf),
         createBufferSource: () => {
           const src = realCtx.createBufferSource();
+          const stopSpy = vi.spyOn(src, 'stop');
+          const disconnectSpy = vi.spyOn(src, 'disconnect');
           lastCreatedSource = src;
+          createdSources.push({ src, stopSpy, disconnectSpy });
           return src;
         },
       };
@@ -89,6 +112,8 @@ describe('Tauri WebView BookScore Validation', () => {
         realCtx,
         wrappedCtx,
         getLastSource: () => lastCreatedSource,
+        getCreatedSources: () => createdSources,
+        getCreatedGains: () => createdGains,
       };
     }
 
@@ -177,28 +202,46 @@ describe('Tauri WebView BookScore Validation', () => {
       }
     });
 
-    it('should transition to silence and propagate errors on silence-first decode failures', async () => {
-      const { player, realCtx } = createSpiedPlayer();
-      const cue = createTestAudioCue();
+    it('should transition active playback to silence and propagate errors on decode failure', async () => {
+      const { player, realCtx, getCreatedSources } = createSpiedPlayer();
+      const validCue = createTestAudioCue({ id: 'cue-active-valid' });
+      const corruptCue = createTestAudioCue({ id: 'cue-corrupt' });
+      const validBytes = createMinimalValidMp3Bytes();
       const corruptBytes = createCorruptMp3Bytes();
 
       try {
         await player.unlockGesture();
 
-        // Silence-first decode failure: play cue with invalid bytes
-        await expect(player.playCue(cue, corruptBytes.buffer as ArrayBuffer)).rejects.toThrow();
+        // 1. Play valid cue to establish active playback
+        await player.playCue(validCue, validBytes.buffer as ArrayBuffer);
+        expect(player.getCurrentCue()?.id).toBe('cue-active-valid');
+        const activeSource = getCreatedSources()[0];
 
-        // Player must clean up its active sources and transition to silence
+        // 2. Play corrupt cue to trigger active-source decode failure
+        await expect(
+          player.playCue(corruptCue, corruptBytes.buffer as ArrayBuffer),
+        ).rejects.toThrow();
+
+        // 3. Player must tear down active playback, clear currentCue, and transition to silence
         expect(player.getCurrentCue()).toBeNull();
-        console.log('[PASS] Player correctly transitioned to silence on corrupt decode failure.');
+
+        // Wait for transitionToSilence fadeout timeout (0.5s default + 50ms)
+        await new Promise((res) => setTimeout(res, 600));
+
+        expect(activeSource!.stopSpy).toHaveBeenCalled();
+        expect(activeSource!.disconnectSpy).toHaveBeenCalled();
+
+        console.log(
+          '[PASS] Active playback correctly transitioned to silence on corrupt decode failure.',
+        );
       } finally {
         await player.dispose();
         await realCtx.close();
       }
     });
 
-    it('should crossfade and transition smoothly between two cues', async () => {
-      const { player, realCtx, getLastSource } = createSpiedPlayer();
+    it('should crossfade and transition smoothly between two cues with gain ramp and node cleanup', async () => {
+      const { player, realCtx, getCreatedSources, getCreatedGains } = createSpiedPlayer();
       const cueA = createTestAudioCue({ id: 'cue-a', volume: 0.9, crossfadeSec: 0.1 });
       const cueB = createTestAudioCue({ id: 'cue-b', volume: 0.5, crossfadeSec: 0.1 });
       const validBytes = createMinimalValidMp3Bytes();
@@ -208,18 +251,34 @@ describe('Tauri WebView BookScore Validation', () => {
 
         // Play cue A
         await player.playCue(cueA, validBytes.buffer as ArrayBuffer);
-        const sourceA = getLastSource();
-        expect(sourceA).not.toBeNull();
+        const sourcesAfterA = getCreatedSources();
+        expect(sourcesAfterA.length).toBe(1);
+        const sourceA = sourcesAfterA[0];
         expect(player.getCurrentCue()?.id).toBe('cue-a');
 
-        // Transition to cue B
+        // Transition to cue B (triggers crossfade of sourceA and fade in of sourceB)
         await player.playCue(cueB, validBytes.buffer as ArrayBuffer);
-        const sourceB = getLastSource();
-        expect(sourceB).not.toBeNull();
-        expect(sourceB).not.toBe(sourceA);
+        const sourcesAfterB = getCreatedSources();
+        expect(sourcesAfterB.length).toBe(2);
+        const sourceB = sourcesAfterB[1];
+
+        expect(sourceB!.src).not.toBe(sourceA!.src);
         expect(player.getCurrentCue()?.id).toBe('cue-b');
 
-        console.log('[PASS] Successfully crossfaded from cue A to cue B.');
+        // Verify gain ramp down was initiated for sourceA gain node (gains[1], since gains[0] is masterGain)
+        const gains = getCreatedGains();
+        expect(gains.length).toBeGreaterThanOrEqual(3);
+        expect(gains[1]!.rampSpy).toHaveBeenCalledWith(0, expect.any(Number));
+
+        // Wait for crossfade timeout (0.1s + 50ms buffer) to complete cleanup of old source
+        await new Promise((res) => setTimeout(res, 200));
+
+        expect(sourceA!.stopSpy).toHaveBeenCalled();
+        expect(sourceA!.disconnectSpy).toHaveBeenCalled();
+
+        console.log(
+          '[PASS] Successfully crossfaded from cue A to cue B and verified gain ramping and node teardown.',
+        );
       } finally {
         await player.dispose();
         await realCtx.close();
