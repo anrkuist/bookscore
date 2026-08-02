@@ -54,6 +54,13 @@ export type LocalAssociation = {
   packageId: string;
   manifestHash: string;
   selected: boolean;
+  trustState?: 'verified' | 'unverified';
+};
+
+export type SoundtrackCandidate = {
+  package: InstalledPackage;
+  trustState: 'verified' | 'unverified';
+  isSelected: boolean;
 };
 
 export type LocationReportKind = 'started' | 'resolved' | 'unavailable';
