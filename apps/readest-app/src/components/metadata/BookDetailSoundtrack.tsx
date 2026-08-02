@@ -24,10 +24,15 @@ import {
 import {
   loadInstalledPackages,
   loadLocalAssociations,
+  loadRepairQueue,
   StoredAssociationsMap,
   StoredPackagesMap,
 } from '@/services/bookscore/persistence';
-import { InstalledPackage, SoundtrackCandidate } from '@/services/bookscore/types';
+import {
+  InstalledPackage,
+  SoundtrackCandidate,
+  StoredRepairQueueMap,
+} from '@/services/bookscore/types';
 
 import { FileSystem } from '@/types/system';
 import Dialog from '../Dialog';
@@ -44,6 +49,7 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [packages, setPackages] = useState<StoredPackagesMap>({});
   const [associations, setAssociations] = useState<StoredAssociationsMap>({});
+  const [repairQueue, setRepairQueue] = useState<StoredRepairQueueMap>({});
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -62,8 +68,10 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
       const fs = appService as unknown as FileSystem;
       const pkgs = await loadInstalledPackages(fs, 'Data');
       const assocs = await loadLocalAssociations(fs, 'Data');
+      const queue = await loadRepairQueue(fs, 'Data');
       setPackages(pkgs);
       setAssociations(assocs);
+      setRepairQueue(queue);
     } catch (err) {
       console.warn('Failed to load soundtrack packages/associations:', err);
     } finally {
@@ -277,49 +285,84 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
             <>
               {/* Active Soundtrack Info */}
               {activeAssociation && activePackage ? (
-                <div className='p-3 rounded-lg border border-base-300 bg-base-200/50 space-y-2 eink-bordered'>
-                  <div className='flex items-center justify-between flex-wrap gap-2'>
-                    <div>
-                      <p className='text-sm font-bold'>{activePackage.manifest.title}</p>
-                      <p className='text-xs text-neutral-content'>
-                        {_('Version')} {activePackage.manifest.version}
-                      </p>
-                    </div>
-                    {activeAssociation.trustState === 'unverified' ? (
-                      <span
-                        className='badge badge-warning gap-1 text-xs py-1 px-2 font-medium'
-                        title={_(
-                          'EPUB edition fingerprint mismatch. Consent granted for local association.',
+                (() => {
+                  const activeRepairItem =
+                    repairQueue[`${activePackage.packageId}:${activePackage.manifestHash}`] ??
+                    repairQueue[activePackage.packageId];
+                  return (
+                    <div className='p-3 rounded-lg border border-base-300 bg-base-200/50 space-y-2 eink-bordered'>
+                      <div className='flex items-center justify-between flex-wrap gap-2'>
+                        <div>
+                          <p className='text-sm font-bold'>{activePackage.manifest.title}</p>
+                          <p className='text-xs text-neutral-content'>
+                            {_('Version')} {activePackage.manifest.version}
+                          </p>
+                        </div>
+                        {activeRepairItem ? (
+                          <span
+                            className='badge badge-error gap-1 text-xs py-1 px-2 font-medium text-white'
+                            title={_('Package failure: {reason}', {
+                              reason: activeRepairItem.reason,
+                            })}
+                          >
+                            <MdWarning className='h-3 w-3' />
+                            {_('Repair Required ({reason})', { reason: activeRepairItem.reason })}
+                          </span>
+                        ) : activeAssociation.trustState === 'unverified' ? (
+                          <span
+                            className='badge badge-warning gap-1 text-xs py-1 px-2 font-medium'
+                            title={_(
+                              'EPUB edition fingerprint mismatch. Consent granted for local association.',
+                            )}
+                          >
+                            <MdWarning className='h-3 w-3' />
+                            {_('Unverified Association')}
+                          </span>
+                        ) : (
+                          <span
+                            className='badge badge-success gap-1 text-xs py-1 px-2 font-medium text-white'
+                            title={_('EPUB edition fingerprint match verified.')}
+                          >
+                            <MdCheckCircle className='h-3 w-3' />
+                            {_('Verified Association')}
+                          </span>
                         )}
-                      >
-                        <MdWarning className='h-3 w-3' />
-                        {_('Unverified Association')}
-                      </span>
-                    ) : (
-                      <span
-                        className='badge badge-success gap-1 text-xs py-1 px-2 font-medium text-white'
-                        title={_('EPUB edition fingerprint match verified.')}
-                      >
-                        <MdCheckCircle className='h-3 w-3' />
-                        {_('Verified Association')}
-                      </span>
-                    )}
-                  </div>
-                  <div className='flex items-center gap-2 pt-1'>
-                    <button
-                      className='btn btn-xs btn-ghost border border-base-300'
-                      onClick={handleDetachActive}
-                    >
-                      {_('Detach')}
-                    </button>
-                    <button
-                      className='btn btn-xs btn-outline btn-error'
-                      onClick={() => setRemovalTarget(activePackage)}
-                    >
-                      {_('Remove Package')}
-                    </button>
-                  </div>
-                </div>
+                      </div>
+
+                      {activeRepairItem && (
+                        <p className='text-xs text-warning leading-relaxed font-medium'>
+                          {_(
+                            'Audio files are missing, unreadable, or corrupted. Re-import the package to repair.',
+                          )}
+                        </p>
+                      )}
+
+                      <div className='flex items-center gap-2 pt-1 flex-wrap'>
+                        {activeRepairItem && (
+                          <button
+                            className='btn btn-xs btn-contrast gap-1'
+                            onClick={() => fileInputRef.current?.click()}
+                          >
+                            <MdOutlineFileUpload className='h-3.5 w-3.5' />
+                            {_('Repair (Re-import)')}
+                          </button>
+                        )}
+                        <button
+                          className='btn btn-xs btn-ghost border border-base-300'
+                          onClick={handleDetachActive}
+                        >
+                          {_('Detach')}
+                        </button>
+                        <button
+                          className='btn btn-xs btn-outline btn-error'
+                          onClick={() => setRemovalTarget(activePackage)}
+                        >
+                          {_('Remove Package')}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()
               ) : (
                 <p className='text-sm text-neutral-content italic'>
                   {_('No soundtrack currently attached to this edition.')}
@@ -333,65 +376,74 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
                     {_('Installed Soundtrack Packages')}
                   </p>
                   <div className='space-y-2 max-h-48 overflow-y-auto pe-1'>
-                    {candidates.map((cand) => (
-                      <div
-                        key={`${cand.package.packageId}:${cand.package.manifestHash}`}
-                        className={clsx(
-                          'p-2.5 rounded-lg border text-sm flex items-center justify-between gap-2',
-                          cand.isSelected
-                            ? 'border-primary bg-primary/5'
-                            : 'border-base-300 bg-base-100',
-                          'eink-bordered',
-                        )}
-                      >
-                        <div className='min-w-0 flex-1'>
-                          <div className='flex items-center gap-2 flex-wrap'>
-                            <span className='font-semibold line-clamp-1'>
-                              {cand.package.manifest.title}
-                            </span>
-                            {cand.trustState === 'verified' ? (
-                              <span className='badge badge-xs badge-success text-white'>
-                                {_('Verified')}
+                    {candidates.map((cand) => {
+                      const candRepairItem =
+                        repairQueue[`${cand.package.packageId}:${cand.package.manifestHash}`] ??
+                        repairQueue[cand.package.packageId];
+                      return (
+                        <div
+                          key={`${cand.package.packageId}:${cand.package.manifestHash}`}
+                          className={clsx(
+                            'p-2.5 rounded-lg border text-sm flex items-center justify-between gap-2',
+                            cand.isSelected
+                              ? 'border-primary bg-primary/5'
+                              : 'border-base-300 bg-base-100',
+                            'eink-bordered',
+                          )}
+                        >
+                          <div className='min-w-0 flex-1'>
+                            <div className='flex items-center gap-2 flex-wrap'>
+                              <span className='font-semibold line-clamp-1'>
+                                {cand.package.manifest.title}
+                              </span>
+                              {candRepairItem ? (
+                                <span className='badge badge-xs badge-error text-white me-1'>
+                                  {_('Repair Required')}
+                                </span>
+                              ) : cand.trustState === 'verified' ? (
+                                <span className='badge badge-xs badge-success text-white'>
+                                  {_('Verified')}
+                                </span>
+                              ) : (
+                                <span className='badge badge-xs badge-warning'>
+                                  {_('Unverified')}
+                                </span>
+                              )}
+                            </div>
+                            <p className='text-xs text-neutral-content'>
+                              v{cand.package.manifest.version}
+                            </p>
+                          </div>
+                          <div className='flex items-center gap-2 flex-wrap justify-end'>
+                            {cand.isSelected ? (
+                              <span className='text-xs font-semibold text-primary px-2 py-1 bg-primary/10 rounded'>
+                                {_('Active')}
                               </span>
                             ) : (
-                              <span className='badge badge-xs badge-warning'>
-                                {_('Unverified')}
-                              </span>
+                              <button
+                                className={clsx(
+                                  'btn btn-xs',
+                                  cand.trustState === 'verified'
+                                    ? 'btn-contrast'
+                                    : 'btn-outline btn-warning',
+                                )}
+                                onClick={() => handleSelectPackage(cand)}
+                              >
+                                {cand.trustState === 'verified'
+                                  ? _('Attach')
+                                  : _('Attach (Consent Required)')}
+                              </button>
                             )}
-                          </div>
-                          <p className='text-xs text-neutral-content'>
-                            v{cand.package.manifest.version}
-                          </p>
-                        </div>
-                        <div className='flex items-center gap-2 flex-wrap justify-end'>
-                          {cand.isSelected ? (
-                            <span className='text-xs font-semibold text-primary px-2 py-1 bg-primary/10 rounded'>
-                              {_('Active')}
-                            </span>
-                          ) : (
                             <button
-                              className={clsx(
-                                'btn btn-xs',
-                                cand.trustState === 'verified'
-                                  ? 'btn-contrast'
-                                  : 'btn-outline btn-warning',
-                              )}
-                              onClick={() => handleSelectPackage(cand)}
+                              className='btn btn-xs btn-outline btn-error'
+                              onClick={() => setRemovalTarget(cand.package)}
                             >
-                              {cand.trustState === 'verified'
-                                ? _('Attach')
-                                : _('Attach (Consent Required)')}
+                              {_('Remove Package')}
                             </button>
-                          )}
-                          <button
-                            className='btn btn-xs btn-outline btn-error'
-                            onClick={() => setRemovalTarget(cand.package)}
-                          >
-                            {_('Remove Package')}
-                          </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

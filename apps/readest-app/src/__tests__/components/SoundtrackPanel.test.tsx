@@ -295,6 +295,7 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     });
 
     const volumeSlider = getByLabelText(/soundtrack volume slider/i);
+    expect(volumeSlider).toBeInTheDocument();
 
     // Test Tab wrap-around from last focusable or Shift+Tab from first focusable
     closeBtn.focus();

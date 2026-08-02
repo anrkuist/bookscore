@@ -12,7 +12,8 @@ export interface BookScoreCapabilityOptions {
  */
 export function isBookScoreCapabilityEnabled(options?: BookScoreCapabilityOptions): boolean {
   const isMobile = options?.isMobile ?? false;
-  const isDesktop = isTauriAppPlatform() && !isMobile;
+  const isTauri = typeof isTauriAppPlatform === 'function' ? isTauriAppPlatform() : false;
+  const isDesktop = isTauri && !isMobile;
   if (!isDesktop) {
     return false;
   }

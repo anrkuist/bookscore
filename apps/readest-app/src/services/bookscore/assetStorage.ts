@@ -92,3 +92,40 @@ export async function loadSoundtrackAssetFile(
 
   return null;
 }
+
+export type AssetVerificationResult = {
+  ok: boolean;
+  reason?: import('./types').RepairFailureReason;
+  buffer?: ArrayBuffer;
+};
+
+/**
+ * Loads and verifies a soundtrack asset file from storage against expected hash and readability.
+ */
+export async function verifySoundtrackAsset(
+  fs: FileSystem,
+  baseDir: BaseDir,
+  packageId: string,
+  assetId: string,
+  manifestHash?: string,
+  expectedHash?: string,
+): Promise<AssetVerificationResult> {
+  const buffer = await loadSoundtrackAssetFile(fs, baseDir, packageId, assetId, manifestHash);
+  if (!buffer) {
+    return { ok: false, reason: 'missing' };
+  }
+  if (buffer.byteLength === 0) {
+    return { ok: false, reason: 'unreadable' };
+  }
+
+  if (expectedHash && expectedHash.trim() !== '') {
+    const { sha256Hex } = await import('./packageValidation');
+    const bytes = new Uint8Array(buffer);
+    const computedHash = await sha256Hex(bytes);
+    if (computedHash.toLowerCase() !== expectedHash.toLowerCase()) {
+      return { ok: false, reason: 'corrupt', buffer };
+    }
+  }
+
+  return { ok: true, buffer };
+}

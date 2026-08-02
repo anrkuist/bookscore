@@ -10,6 +10,7 @@ import { saveSoundtrackAssetFile } from './assetStorage';
 import {
   loadInstalledPackages,
   loadLocalAssociations,
+  removePackageFromRepairQueue,
   saveInstalledPackages,
   saveLocalAssociations,
   StoredAssociationsMap,
@@ -277,6 +278,7 @@ export async function removeInstalledPackage(
   }
 
   await saveLocalAssociations(fs, baseDir, updatedAssociations);
+  await removePackageFromRepairQueue(fs, baseDir, packageId, manifestHash);
 
   return {
     success: true,
@@ -420,6 +422,8 @@ export async function importAndAssociateBookScorePackage(
         await saveLocalAssociations(fs, baseDir, updatedAssociations);
       }
     }
+
+    await removePackageFromRepairQueue(fs, baseDir, pkgToUse.packageId, pkgToUse.manifestHash);
 
     return {
       success: true,
