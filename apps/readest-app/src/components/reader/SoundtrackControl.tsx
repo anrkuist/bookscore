@@ -61,10 +61,11 @@ export const SoundtrackControl: React.FC<SoundtrackControlProps> = ({ isMobile }
         <button
           type='button'
           onClick={togglePanel}
-          aria-label={_('Soundtrack controls')}
+          aria-label={`${_('Soundtrack controls')} - ${statusTooltip}`}
           aria-expanded={isPanelOpen}
           className={clsx(
             'btn btn-ghost btn-xs sm:btn-sm gap-1 eink-bordered font-normal',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15',
             isPanelOpen && 'bg-base-300/50',
           )}
         >
