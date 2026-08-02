@@ -65,6 +65,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
   const [consentTarget, setConsentTarget] = useState<InstalledPackage | null>(null);
   const [preMuteVolume, setPreMuteVolume] = useState<number>(1.0);
 
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
 
@@ -97,7 +98,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
     }
   }, [isEnabled, isPanelOpen, currentEditionId]);
 
-  // Keyboard shortcut listener: Escape key closes the panel & Focus Lifecycle Management
+  // Keyboard focus lifecycle & Tab/Shift+Tab focus containment
   useEffect(() => {
     if (!isPanelOpen) return;
 
@@ -113,6 +114,35 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setPanelOpen(false);
+        return;
+      }
+
+      if (e.key === 'Tab' && panelRef.current) {
+        const focusables = panelRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        );
+        if (focusables.length === 0) return;
+
+        const first = focusables[0]!;
+        const last = focusables[focusables.length - 1]!;
+
+        if (e.shiftKey) {
+          if (
+            document.activeElement === first ||
+            !panelRef.current.contains(document.activeElement)
+          ) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else {
+          if (
+            document.activeElement === last ||
+            !panelRef.current.contains(document.activeElement)
+          ) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -235,12 +265,13 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
   return (
     <>
       <div
+        ref={panelRef}
         role='dialog'
         aria-label={_('Soundtrack Control Panel')}
         aria-modal='true'
         className={clsx(
           'soundtrack-panel fixed top-0 end-0 z-40 h-full w-80 sm:w-96 bg-base-100 shadow-2xl',
-          'border-s border-base-300 flex flex-col transition-all duration-300 ease-in-out',
+          'border-s border-base-300 flex flex-col',
           'eink-bordered text-base-content overflow-hidden',
         )}
       >
@@ -250,7 +281,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
             <MdMusicNote className='h-5 w-5 text-primary shrink-0 mt-0.5' />
             <div className='flex flex-col min-w-0'>
               <h2 className='text-lg font-semibold tracking-tight truncate'>{_('Soundtrack')}</h2>
-              <p className='text-xs text-neutral-content truncate'>
+              <p className='text-sm text-base-content/70 leading-relaxed truncate'>
                 {_('Manage soundtrack playback, volume, and attached packages.')}
               </p>
             </div>
@@ -275,6 +306,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
                 type='button'
                 className='btn btn-ghost btn-xs'
                 onClick={() => setErrorMsg(null)}
+                aria-label={_('Dismiss soundtrack error')}
               >
                 ✕
               </button>

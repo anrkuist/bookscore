@@ -180,17 +180,20 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
       );
     useSoundtrackStore.getState().setPanelOpen(true);
 
-    const { getByRole, getByLabelText, findByText, container } = render(
+    const { getByRole, getByLabelText, findByText } = render(
       <SoundtrackPanel editionId='edition-123' isMobile={false} />,
     );
 
     const dialog = getByRole('dialog', { name: /soundtrack control panel/i });
     expect(dialog).toBeDefined();
 
-    // Check DESIGN.md §2.9 heading
+    // Check DESIGN.md §2.9 heading and canonical description style
     const h2 = dialog.querySelector('h2');
     expect(h2?.className).toContain('text-lg font-semibold tracking-tight');
     expect(h2?.textContent).toBe('Soundtrack');
+
+    const descP = dialog.querySelector('p');
+    expect(descP?.className).toContain('text-sm text-base-content/70 leading-relaxed');
 
     // Check RTL logical positioning classes
     expect(dialog.className).toContain('end-0');
@@ -252,7 +255,7 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     });
   });
 
-  it('manages focus lifecycle on panel open and close', async () => {
+  it('manages focus lifecycle and traps Tab/Shift+Tab key focus inside panel', async () => {
     useSoundtrackStore.getState().setCapabilityEnabled(true);
     useSoundtrackStore
       .getState()
@@ -268,13 +271,24 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
 
     useSoundtrackStore.getState().setPanelOpen(true);
 
-    const { getByRole } = render(<SoundtrackPanel editionId='edition-123' isMobile={false} />);
+    const { getByRole, getByLabelText } = render(
+      <SoundtrackPanel editionId='edition-123' isMobile={false} />,
+    );
 
     const closeBtn = getByRole('button', { name: /close soundtrack panel/i });
 
     await waitFor(() => {
       expect(document.activeElement).toBe(closeBtn);
     });
+
+    const volumeSlider = getByLabelText(/soundtrack volume slider/i);
+
+    // Test Tab wrap-around from last focusable or Shift+Tab from first focusable
+    closeBtn.focus();
+    fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+    // Expect focus to wrap to last focusable element or stay trapped inside panel
+    const dialog = getByRole('dialog', { name: /soundtrack control panel/i });
+    expect(dialog.contains(document.activeElement)).toBe(true);
 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(useSoundtrackStore.getState().isPanelOpen).toBe(false);

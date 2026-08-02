@@ -269,15 +269,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     set({ isUserPlaying: true });
 
     if (selectedCue && selectedCue.type === 'audio' && activePackage && playerInstance) {
-      // Requirement: Play stops active TTS ONLY when audio playback actually starts
-      if (typeof window !== 'undefined') {
-        const activeSession = ttsSessionManager.getActiveSession();
-        const targetBookKey = activeSession?.bookKey || activeBookKey || activeEditionId || '';
-        eventDispatcher.dispatch('tts-stop', { bookKey: targetBookKey });
-      }
-
       playerInstance.setVolume?.(get().volume);
-      set({ playbackStatus: 'playing' });
       const success = await resolveAndPlayAudioCue(
         selectedCue,
         activePackage,
@@ -285,7 +277,15 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
         customFs,
         isResume,
       );
-      if (!success) {
+      if (success) {
+        set({ playbackStatus: 'playing' });
+        // Requirement: Play stops active TTS ONLY when audio playback successfully starts
+        if (typeof window !== 'undefined') {
+          const activeSession = ttsSessionManager.getActiveSession();
+          const targetBookKey = activeSession?.bookKey || activeBookKey || activeEditionId || '';
+          eventDispatcher.dispatch('tts-stop', { bookKey: targetBookKey });
+        }
+      } else {
         set({ playbackStatus: 'silence' });
       }
     } else {

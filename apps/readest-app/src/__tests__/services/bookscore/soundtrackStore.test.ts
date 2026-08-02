@@ -172,4 +172,64 @@ describe('soundtrackStore issue #15 enhancements', () => {
     // Verify tts-stop was NOT called because selected cue is silence
     expect(dispatchSpy).not.toHaveBeenCalledWith('tts-stop', expect.anything());
   });
+
+  it('does NOT stop TTS and falls back to silence if audio asset resolution fails', async () => {
+    const fakePlayer = new FakeSoundtrackPlayer();
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore.getState().registerSoundtrackPlayer(fakePlayer);
+
+    const dispatchSpy = vi.spyOn(eventDispatcher, 'dispatch');
+
+    // Cue references missing asset asset-missing
+    const brokenCue: AudioCue = {
+      id: 'cue-broken',
+      startCfi: 'epubcfi(/6/2!/4/2)',
+      type: 'audio',
+      assetId: 'asset-missing',
+      startSec: 0,
+      loopStartSec: 0,
+      loopEndSec: 10,
+      volume: 1,
+      crossfadeSec: 0.5,
+    };
+
+    const brokenPkg: InstalledPackage = {
+      packageId: 'pkg-broken',
+      manifestHash: 'hash-broken',
+      installedAt: Date.now(),
+      manifest: {
+        packageId: 'pkg-broken',
+        title: 'Broken Package',
+        version: 1,
+        manifestHash: 'hash-broken',
+        editionCompatibility: [],
+        assets: [], // missing asset-missing
+        cues: [brokenCue],
+      },
+    };
+
+    const assoc: LocalAssociation = {
+      editionId: 'ed-broken',
+      packageId: 'pkg-broken',
+      manifestHash: 'hash-broken',
+      selected: true,
+      trustState: 'verified',
+    };
+
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'ed-broken',
+        { 'pkg-broken:hash-broken': brokenPkg },
+        { 'ed-broken': assoc },
+        undefined,
+        'ed-broken-123',
+      );
+
+    await useSoundtrackStore.getState().play();
+
+    // Verify tts-stop was NOT called when audio asset resolution failed
+    expect(dispatchSpy).not.toHaveBeenCalledWith('tts-stop', expect.anything());
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
+  });
 });
