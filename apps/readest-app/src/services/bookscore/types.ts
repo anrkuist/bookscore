@@ -95,3 +95,37 @@ export type RepairQueueItem = {
 };
 
 export type StoredRepairQueueMap = Record<string, RepairQueueItem>;
+
+/**
+ * An in-progress authoring copy derived from an installed package.
+ * The manifest is fully mutable.  Assets are keyed by assetId and always
+ * retain the binary bytes that were copied from the source package so the
+ * copy is self-contained even after the source is removed.
+ */
+export type EditableCopy = {
+  /** Stable id for this copy; independent of the source package. */
+  copyId: string;
+  /** Source package reference (informational; copy is independent). */
+  sourcePackageId: string;
+  sourceManifestHash: string;
+  /** EPUB edition this copy is authored for. */
+  editionId: string;
+  /** The mutable working manifest for this copy. */
+  manifest: SoundtrackPackageManifest;
+  /** Binary MP3 bytes for each asset – keyed by assetId. */
+  assetBytes: Record<string, Uint8Array>;
+  createdAt: number;
+  modifiedAt: number;
+};
+
+export type CueValidationIssue = {
+  severity: 'error' | 'warning';
+  cueId?: string;
+  assetId?: string;
+  message: string;
+};
+
+export type EditableCopyValidationResult = {
+  valid: boolean;
+  issues: CueValidationIssue[];
+};

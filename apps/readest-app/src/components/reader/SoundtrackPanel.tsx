@@ -1,11 +1,14 @@
 'use client';
 
 import clsx from 'clsx';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   MdCheckCircle,
   MdClose,
+  MdDelete,
+  MdEdit,
   MdMusicNote,
+  MdOutlineFileDownload,
   MdOutlineFileUpload,
   MdPause,
   MdPlayArrow,
@@ -29,7 +32,24 @@ import {
   StoredAssociationsMap,
   StoredPackagesMap,
 } from '@/services/bookscore/persistence';
-import { InstalledPackage, SoundtrackCandidate } from '@/services/bookscore/types';
+import {
+  addCueAtCfi,
+  editCue,
+  exportEditableCopy,
+  makeEditableCopy,
+  removeCue,
+  updateCopyTitle,
+  validateEditableCopy,
+} from '@/services/bookscore/authoringService';
+import {
+  AudioCue,
+  CueValidationIssue,
+  EditableCopy,
+  InstalledPackage,
+  SilenceCue,
+  SoundtrackCandidate,
+  SoundtrackCue,
+} from '@/services/bookscore/types';
 import { useSoundtrackStore } from '@/store/soundtrackStore';
 import { FileSystem } from '@/types/system';
 import Dialog from '../Dialog';
@@ -37,9 +57,15 @@ import Dialog from '../Dialog';
 export interface SoundtrackPanelProps {
   editionId?: string;
   isMobile?: boolean;
+  /** Current reader CFI – used to anchor new cues in authoring mode. */
+  currentCfi?: string;
 }
 
-export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isMobile }) => {
+export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
+  editionId,
+  isMobile,
+  currentCfi,
+}) => {
   const _ = useTranslation();
   const { appService } = useEnv();
 
@@ -55,6 +81,15 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
   const activeEditionIdFromStore = useSoundtrackStore((s) => s.activeEditionId);
   const activeBookKeyFromStore = useSoundtrackStore((s) => s.activeBookKey);
 
+  const editableCopy = useSoundtrackStore((s) => s.editableCopy);
+  const isAuthoringMode = useSoundtrackStore((s) => s.isAuthoringMode);
+  const isPreviewingCue = useSoundtrackStore((s) => s.isPreviewingCue);
+  const enterAuthoringMode = useSoundtrackStore((s) => s.enterAuthoringMode);
+  const exitAuthoringMode = useSoundtrackStore((s) => s.exitAuthoringMode);
+  const updateEditableCopy = useSoundtrackStore((s) => s.updateEditableCopy);
+  const startCuePreview = useSoundtrackStore((s) => s.startCuePreview);
+  const stopCuePreview = useSoundtrackStore((s) => s.stopCuePreview);
+
   const togglePlayPause = useSoundtrackStore((s) => s.togglePlayPause);
   const setVolume = useSoundtrackStore((s) => s.setVolume);
   const setPanelOpen = useSoundtrackStore((s) => s.setPanelOpen);
@@ -68,6 +103,13 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [consentTarget, setConsentTarget] = useState<InstalledPackage | null>(null);
   const [preMuteVolume, setPreMuteVolume] = useState<number>(1.0);
+
+  // Authoring mode local state
+  const [authoringTitle, setAuthoringTitle] = useState('');
+  const [editingCue, setEditingCue] = useState<SoundtrackCue | null>(null);
+  const [validationIssues, setValidationIssues] = useState<CueValidationIssue[]>([]);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
 
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -315,6 +357,106 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
     }
   };
 
+  // ---------- Authoring mode handlers ----------
+
+  const handleMakeEditableCopy = useCallback(
+    async (pkg: InstalledPackage) => {
+      if (!appService || !currentEditionId) return;
+      setErrorMsg(null);
+      const fs = appService as unknown as FileSystem;
+      const res = await makeEditableCopy(
+        fs,
+        'Data',
+        pkg.packageId,
+        pkg.manifestHash,
+        currentEditionId,
+      );
+      if (!res.success) {
+        setErrorMsg(res.error);
+        return;
+      }
+      setAuthoringTitle(res.copy.manifest.title);
+      setValidationIssues([]);
+      setExportError(null);
+      enterAuthoringMode(res.copy);
+    },
+    [appService, currentEditionId, enterAuthoringMode],
+  );
+
+  const handleAddCueHere = useCallback(() => {
+    if (!editableCopy) return;
+    const cfi = currentCfi || 'epubcfi(/6/2!/4/2:0)';
+    const newId = `cue-${Date.now()}`;
+    const newCue: SilenceCue = { id: newId, startCfi: cfi, type: 'silence' };
+    const updated = addCueAtCfi(editableCopy, newCue);
+    updateEditableCopy(updated);
+    setEditingCue(newCue);
+    setValidationIssues([]);
+  }, [editableCopy, currentCfi, updateEditableCopy]);
+
+  const handleRemoveCue = useCallback(
+    (cueId: string) => {
+      if (!editableCopy) return;
+      const updated = removeCue(editableCopy, cueId);
+      updateEditableCopy(updated);
+      if (editingCue?.id === cueId) setEditingCue(null);
+      setValidationIssues([]);
+    },
+    [editableCopy, editingCue, updateEditableCopy],
+  );
+
+  const handleEditCueSave = useCallback(
+    (cue: SoundtrackCue) => {
+      if (!editableCopy) return;
+      const updated = editCue(editableCopy, cue);
+      updateEditableCopy(updated);
+      setEditingCue(null);
+      setValidationIssues([]);
+    },
+    [editableCopy, updateEditableCopy],
+  );
+
+  const handleAuthoringTitleBlur = useCallback(() => {
+    if (!editableCopy) return;
+    const updated = updateCopyTitle(editableCopy, authoringTitle);
+    updateEditableCopy(updated);
+  }, [editableCopy, authoringTitle, updateEditableCopy]);
+
+  const handleValidate = useCallback(() => {
+    if (!editableCopy) return;
+    const result = validateEditableCopy(editableCopy);
+    setValidationIssues(result.issues);
+    setExportError(null);
+  }, [editableCopy]);
+
+  const handleExport = useCallback(async () => {
+    if (!editableCopy) return;
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      const result = await exportEditableCopy(editableCopy);
+      if (!result.success) {
+        setExportError(result.error);
+        if ('issues' in result && result.issues) {
+          setValidationIssues(result.issues);
+        }
+        return;
+      }
+      // Trigger download in browser
+      if (typeof window !== 'undefined') {
+        const blob = new Blob([result.archiveBytes], { type: 'application/zip' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${editableCopy.manifest.title.replace(/[^a-z0-9]/gi, '_')}.bookscore`;
+        a.click();
+        URL.revokeObjectURL(url);
+      }
+    } finally {
+      setIsExporting(false);
+    }
+  }, [editableCopy]);
+
   return (
     <>
       <div
@@ -526,73 +668,268 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
                   <div
                     key={`${cand.package.packageId}:${cand.package.manifestHash}`}
                     className={clsx(
-                      'p-2.5 rounded-lg border text-xs flex items-center justify-between gap-2',
+                      'p-2.5 rounded-lg border text-xs space-y-2',
                       cand.isSelected
                         ? 'border-primary bg-primary/5'
                         : 'border-base-300 bg-base-100',
                       'eink-bordered',
                     )}
                   >
-                    <div className='min-w-0 flex-1 space-y-0.5'>
-                      <div className='flex items-center gap-1.5 flex-wrap'>
-                        <span className='font-semibold line-clamp-1'>
-                          {cand.package.manifest.title}
-                        </span>
-                        {cand.trustState === 'verified' ? (
-                          <span
-                            className='badge badge-xs badge-success text-white shrink-0'
-                            title={_('EPUB edition fingerprint match verified.')}
-                          >
-                            <MdCheckCircle className='h-2.5 w-2.5 me-0.5 inline' />
-                            {_('Verified')}
+                    <div className='flex items-center justify-between gap-2'>
+                      <div className='min-w-0 flex-1 space-y-0.5'>
+                        <div className='flex items-center gap-1.5 flex-wrap'>
+                          <span className='font-semibold line-clamp-1'>
+                            {cand.package.manifest.title}
+                          </span>
+                          {cand.trustState === 'verified' ? (
+                            <span
+                              className='badge badge-xs badge-success text-white shrink-0'
+                              title={_('EPUB edition fingerprint match verified.')}
+                            >
+                              <MdCheckCircle className='h-2.5 w-2.5 me-0.5 inline' />
+                              {_('Verified')}
+                            </span>
+                          ) : (
+                            <span
+                              className='badge badge-xs badge-warning shrink-0'
+                              title={_(
+                                'EPUB edition fingerprint mismatch. Consent required for local association.',
+                              )}
+                            >
+                              <MdWarning className='h-2.5 w-2.5 me-0.5 inline' />
+                              {_('Unverified')}
+                            </span>
+                          )}
+                        </div>
+                        <p className='text-[11px] text-neutral-content'>
+                          v{cand.package.manifest.version}
+                        </p>
+                      </div>
+
+                      <div className='shrink-0'>
+                        {cand.isSelected ? (
+                          <span className='text-xs font-semibold text-primary px-2 py-0.5 bg-primary/10 rounded'>
+                            {_('Active')}
                           </span>
                         ) : (
-                          <span
-                            className='badge badge-xs badge-warning shrink-0'
-                            title={_(
-                              'EPUB edition fingerprint mismatch. Consent required for local association.',
+                          <button
+                            type='button'
+                            className={clsx(
+                              'btn btn-xs',
+                              cand.trustState === 'verified'
+                                ? 'btn-contrast'
+                                : 'btn-outline btn-warning',
                             )}
+                            onClick={() => handleSelectCandidate(cand)}
+                            aria-label={
+                              cand.trustState === 'verified'
+                                ? _('Attach verified package')
+                                : _('Attach unverified package')
+                            }
                           >
-                            <MdWarning className='h-2.5 w-2.5 me-0.5 inline' />
-                            {_('Unverified')}
-                          </span>
+                            {cand.trustState === 'verified' ? _('Switch') : _('Switch (Consent)')}
+                          </button>
                         )}
                       </div>
-                      <p className='text-[11px] text-neutral-content'>
-                        v{cand.package.manifest.version}
-                      </p>
                     </div>
 
-                    <div className='shrink-0'>
-                      {cand.isSelected ? (
-                        <span className='text-xs font-semibold text-primary px-2 py-0.5 bg-primary/10 rounded'>
-                          {_('Active')}
-                        </span>
-                      ) : (
-                        <button
-                          type='button'
-                          className={clsx(
-                            'btn btn-xs',
-                            cand.trustState === 'verified'
-                              ? 'btn-contrast'
-                              : 'btn-outline btn-warning',
-                          )}
-                          onClick={() => handleSelectCandidate(cand)}
-                          aria-label={
-                            cand.trustState === 'verified'
-                              ? _('Attach verified package')
-                              : _('Attach unverified package')
-                          }
-                        >
-                          {cand.trustState === 'verified' ? _('Switch') : _('Switch (Consent)')}
-                        </button>
-                      )}
-                    </div>
+                    {/* Make editable copy button — only for selected package */}
+                    {cand.isSelected && (
+                      <button
+                        type='button'
+                        id={`make-editable-copy-${cand.package.packageId}`}
+                        className='btn btn-xs btn-ghost border border-base-300 w-full eink-bordered gap-1'
+                        onClick={() => handleMakeEditableCopy(cand.package)}
+                        aria-label={_('Make an editable copy of this soundtrack')}
+                      >
+                        <MdEdit className='h-3.5 w-3.5' />
+                        {_('Make Editable Copy')}
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
             )}
           </div>
+
+          {/* Authoring Mode Panel (inline, replaces reading view when active) */}
+          {isAuthoringMode && editableCopy && (
+            <div className='border border-primary/30 rounded-lg bg-primary/5 space-y-3 p-3.5 eink-bordered'>
+              <div className='flex items-center justify-between'>
+                <span className='text-xs font-bold uppercase tracking-wider text-primary/80'>
+                  {_('Authoring Mode')}
+                </span>
+                <button
+                  type='button'
+                  id='exit-authoring-mode'
+                  className='btn btn-xs btn-ghost eink-bordered'
+                  onClick={exitAuthoringMode}
+                  aria-label={_('Exit authoring mode')}
+                >
+                  {_('← Reading')}
+                </button>
+              </div>
+
+              {/* Title editor */}
+              <label className='block text-xs font-medium'>
+                {_('Soundtrack name')}
+                <input
+                  id='authoring-title-input'
+                  className='mt-1 w-full rounded border border-base-300 bg-base-100 px-2 py-1.5 text-sm font-normal eink-bordered'
+                  value={authoringTitle}
+                  onChange={(e) => setAuthoringTitle(e.target.value)}
+                  onBlur={handleAuthoringTitleBlur}
+                  aria-label={_('Soundtrack name')}
+                />
+              </label>
+
+              {/* Cue list */}
+              <div>
+                <div className='flex items-center justify-between mb-1.5'>
+                  <span className='text-xs font-semibold'>{_('Cues')}</span>
+                  <button
+                    type='button'
+                    id='add-cue-at-position'
+                    className='btn btn-xs btn-ghost border border-base-300 eink-bordered gap-1'
+                    onClick={handleAddCueHere}
+                    aria-label={_('Add cue at current reading position')}
+                  >
+                    + {_('At this position')}
+                  </button>
+                </div>
+
+                <div className='space-y-1.5 max-h-40 overflow-y-auto'>
+                  {editableCopy.manifest.cues.length === 0 && (
+                    <p className='text-xs text-neutral-content italic py-1'>
+                      {_('No cues yet. Add one at the current position.')}
+                    </p>
+                  )}
+                  {editableCopy.manifest.cues.map((cue) => (
+                    <div
+                      key={cue.id}
+                      className={clsx(
+                        'flex items-center justify-between gap-1 rounded border px-2 py-1 text-xs',
+                        editingCue?.id === cue.id
+                          ? 'border-primary bg-primary/5'
+                          : 'border-base-300 bg-base-100',
+                        'eink-bordered',
+                      )}
+                    >
+                      <div className='min-w-0 flex-1'>
+                        <span className='font-mono text-[10px] text-neutral-content truncate block'>
+                          {cue.startCfi}
+                        </span>
+                        <span className='font-medium'>
+                          {cue.type === 'silence' ? _('Silence') : cue.assetId}
+                        </span>
+                      </div>
+                      <div className='shrink-0 flex gap-1'>
+                        {cue.type === 'audio' && (
+                          <button
+                            type='button'
+                            id={`preview-cue-${cue.id}`}
+                            className='btn btn-xs btn-ghost p-0.5'
+                            onClick={() =>
+                              isPreviewingCue ? stopCuePreview() : void startCuePreview(cue)
+                            }
+                            aria-label={
+                              isPreviewingCue && editingCue?.id === cue.id
+                                ? _('Stop preview')
+                                : _('Preview cue')
+                            }
+                          >
+                            {isPreviewingCue && editingCue?.id === cue.id ? (
+                              <MdPause className='h-3.5 w-3.5' />
+                            ) : (
+                              <MdPlayArrow className='h-3.5 w-3.5' />
+                            )}
+                          </button>
+                        )}
+                        <button
+                          type='button'
+                          id={`edit-cue-${cue.id}`}
+                          className='btn btn-xs btn-ghost p-0.5'
+                          onClick={() => setEditingCue(editingCue?.id === cue.id ? null : cue)}
+                          aria-label={_('Edit cue')}
+                        >
+                          <MdEdit className='h-3.5 w-3.5' />
+                        </button>
+                        <button
+                          type='button'
+                          id={`remove-cue-${cue.id}`}
+                          className='btn btn-xs btn-ghost p-0.5 text-error'
+                          onClick={() => handleRemoveCue(cue.id)}
+                          aria-label={_('Remove cue')}
+                        >
+                          <MdDelete className='h-3.5 w-3.5' />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Inline cue editor */}
+              {editingCue && editingCue.type === 'audio' && (
+                <CueEditor
+                  cue={editingCue}
+                  onSave={handleEditCueSave}
+                  onCancel={() => setEditingCue(null)}
+                  _={_}
+                />
+              )}
+
+              {/* Validation issues */}
+              {validationIssues.length > 0 && (
+                <div className='space-y-1'>
+                  {validationIssues.map((issue, idx) => (
+                    <div
+                      key={idx}
+                      className={clsx(
+                        'text-xs rounded px-2 py-1',
+                        issue.severity === 'error'
+                          ? 'bg-error/10 text-error'
+                          : 'bg-warning/10 text-warning',
+                      )}
+                    >
+                      {issue.severity === 'error' ? '✕' : '⚠'} {issue.message}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {exportError && (
+                <p className='text-xs text-error rounded bg-error/10 px-2 py-1'>{exportError}</p>
+              )}
+
+              {/* Validate + Export actions */}
+              <div className='grid grid-cols-2 gap-2 pt-1'>
+                <button
+                  type='button'
+                  id='validate-editable-copy'
+                  className='btn btn-xs btn-ghost border border-base-300 eink-bordered'
+                  onClick={handleValidate}
+                >
+                  {_('Validate')}
+                </button>
+                <button
+                  type='button'
+                  id='export-editable-copy'
+                  className='btn btn-xs btn-contrast gap-1'
+                  onClick={() => void handleExport()}
+                  disabled={isExporting}
+                  aria-label={_('Export editable copy as .bookscore file')}
+                >
+                  {isExporting ? (
+                    <span className='not-eink:animate-spin'>⟳</span>
+                  ) : (
+                    <MdOutlineFileDownload className='h-3.5 w-3.5' />
+                  )}
+                  {_('Export')}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -646,5 +983,91 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
         </Dialog>
       )}
     </>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// CueEditor – inline editor for a single AudioCue's parameters
+// ---------------------------------------------------------------------------
+
+interface CueEditorProps {
+  cue: AudioCue;
+  onSave: (cue: SoundtrackCue) => void;
+  onCancel: () => void;
+  _: (key: string) => string;
+}
+
+const CueEditor: React.FC<CueEditorProps> = ({ cue, onSave, onCancel, _ }) => {
+  const [startSec, setStartSec] = useState(String(cue.startSec));
+  const [loopStartSec, setLoopStartSec] = useState(String(cue.loopStartSec));
+  const [loopEndSec, setLoopEndSec] = useState(String(cue.loopEndSec));
+  const [volume, setVolume] = useState(String(cue.volume));
+  const [crossfadeSec, setCrossfadeSec] = useState(String(cue.crossfadeSec));
+
+  const handleSave = () => {
+    const updated: AudioCue = {
+      ...cue,
+      startSec: parseFloat(startSec) || 0,
+      loopStartSec: parseFloat(loopStartSec) || 0,
+      loopEndSec: parseFloat(loopEndSec) || cue.loopEndSec,
+      volume: Math.min(1, Math.max(0, parseFloat(volume) || cue.volume)),
+      crossfadeSec: parseFloat(crossfadeSec) || 0.5,
+    };
+    onSave(updated);
+  };
+
+  return (
+    <div className='rounded border border-primary/30 bg-base-100 p-2.5 space-y-2 text-xs eink-bordered'>
+      <p className='font-semibold text-primary/80'>
+        {_('Edit Cue')}: {cue.id}
+      </p>
+      {[
+        { label: _('Start (s)'), value: startSec, setter: setStartSec, id: `cue-start-${cue.id}` },
+        {
+          label: _('Loop start (s)'),
+          value: loopStartSec,
+          setter: setLoopStartSec,
+          id: `cue-loop-start-${cue.id}`,
+        },
+        {
+          label: _('Loop end (s)'),
+          value: loopEndSec,
+          setter: setLoopEndSec,
+          id: `cue-loop-end-${cue.id}`,
+        },
+        { label: _('Volume (0-1)'), value: volume, setter: setVolume, id: `cue-volume-${cue.id}` },
+        {
+          label: _('Crossfade (s)'),
+          value: crossfadeSec,
+          setter: setCrossfadeSec,
+          id: `cue-crossfade-${cue.id}`,
+        },
+      ].map(({ label, value, setter, id }) => (
+        <label key={id} className='flex items-center justify-between gap-2'>
+          <span className='text-neutral-content shrink-0'>{label}</span>
+          <input
+            id={id}
+            type='number'
+            step='0.01'
+            className='input input-xs border border-base-300 bg-base-100 w-20 text-right eink-bordered'
+            value={value}
+            onChange={(e) => setter(e.target.value)}
+          />
+        </label>
+      ))}
+      <div className='flex gap-2 justify-end pt-1'>
+        <button type='button' className='btn btn-xs btn-ghost eink-bordered' onClick={onCancel}>
+          {_('Cancel')}
+        </button>
+        <button
+          type='button'
+          id={`save-cue-${cue.id}`}
+          className='btn btn-xs btn-contrast'
+          onClick={handleSave}
+        >
+          {_('Save')}
+        </button>
+      </div>
+    </div>
   );
 };
