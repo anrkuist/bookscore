@@ -13,8 +13,14 @@ POLL_INTERVAL=3
 # Locate built binary path
 # In Tauri, tauri build packages the app statically.
 # When --features webdriver is enabled, the compiled binary hosts a W3C WebDriver server on port 4445.
-# On macOS, it compiles into src-tauri/target/debug/bundle/macos/Readest.app (with tauri build --debug)
-APP_PATH="src-tauri/target/debug/bundle/macos/Readest.app"
+# Workspace cargo builds output to repository root target directory.
+if [ -d "../../target/debug/bundle/macos/Readest.app" ]; then
+  APP_PATH="../../target/debug/bundle/macos/Readest.app"
+elif [ -d "target/debug/bundle/macos/Readest.app" ]; then
+  APP_PATH="target/debug/bundle/macos/Readest.app"
+else
+  APP_PATH="src-tauri/target/debug/bundle/macos/Readest.app"
+fi
 BINARY_PATH="${APP_PATH}/Contents/MacOS/readest"
 
 cleanup() {
@@ -35,18 +41,18 @@ lsof -ti :"$WEBDRIVER_PORT" 2>/dev/null | xargs kill 2>/dev/null || true
 
 # 1. Build the Tauri app statically with webdriver enabled (no dev server needed)
 echo "Building static frontend and compiling macOS app with webdriver feature..."
-if [ ! -d "src-tauri/target/debug/bundle/macos/Readest.app" ]; then
+if [ ! -d "${APP_PATH}" ]; then
   echo "App not found at target path. Performing clean build..."
   pnpm build
-  dotenv -e .env.tauri -- tauri build --debug --features webdriver
+  pnpm exec dotenv -e .env.tauri -- pnpm tauri build --debug --features webdriver --bundles app --no-sign
 else
   echo "Found existing debug app at ${APP_PATH}. Running compiler update checks..."
-  dotenv -e .env.tauri -- tauri build --debug --features webdriver
+  pnpm exec dotenv -e .env.tauri -- pnpm tauri build --debug --features webdriver --bundles app --no-sign
 fi
 
 # 2. Launch the compiled macOS app directly
 echo "Launching packaged app at ${BINARY_PATH}..."
-dotenv -e .env.tauri -- "${BINARY_PATH}" &
+pnpm exec dotenv -e .env.tauri -- "${BINARY_PATH}" &
 TAURI_PID=$!
 
 # 3. Wait for the embedded W3C WebDriver server to start

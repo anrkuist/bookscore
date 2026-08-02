@@ -136,7 +136,7 @@ describe('Tauri WebView BookScore Validation', () => {
         const savedOffset = player.getSavedOffset(cue.id);
         expect(savedOffset).toBeDefined();
         expect(savedOffset).toBeGreaterThanOrEqual(0.2);
-        expect(player.getCurrentCue()).toBeNull(); // Current active reference is paused/cleared
+        expect(player.getCurrentCue()?.id).toBe(cue.id);
 
         // Resume playback
         await player.playCue(cue, validBytes.buffer as ArrayBuffer, true);
