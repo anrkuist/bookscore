@@ -6,7 +6,6 @@ import {
   SoundtrackPackageManifest,
 } from './types';
 import { AudioDecoderFn, sha256Hex, validateBookScorePackageArchive } from './packageValidation';
-import { saveSoundtrackAssetFile } from './assetStorage';
 import {
   loadInstalledPackages,
   loadLocalAssociations,

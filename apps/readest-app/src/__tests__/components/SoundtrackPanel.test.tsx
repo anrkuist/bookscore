@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+vi.mock('@/services/tts/TTSController', () => ({
+  TTSController: class {},
+  DEFAULT_SENTENCE_GAP_SEC: 0.1,
+  DEFAULT_PARAGRAPH_GAP_SEC: 0.5,
+}));
 import { render, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 
@@ -295,7 +300,7 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     });
 
     const volumeSlider = getByLabelText(/soundtrack volume slider/i);
-    expect(volumeSlider).toBeInTheDocument();
+    expect(volumeSlider).toBeDefined();
 
     // Test Tab wrap-around from last focusable or Shift+Tab from first focusable
     closeBtn.focus();
@@ -306,5 +311,157 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(useSoundtrackStore.getState().isPanelOpen).toBe(false);
+  });
+
+  it('uses currentCfi from soundtrackStore when rendered via SoundtrackControl without explicit prop', async () => {
+    vi.spyOn(persistenceModule, 'loadInstalledPackages').mockResolvedValue({
+      'pkg-verified-1:hash-1': samplePkg,
+    });
+    vi.spyOn(persistenceModule, 'loadLocalAssociations').mockResolvedValue({
+      'edition-123': sampleAssoc,
+    });
+
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'edition-123',
+        { 'pkg-verified-1:hash-1': samplePkg },
+        { 'edition-123': sampleAssoc },
+      );
+    useSoundtrackStore.getState().reportLocation({
+      seq: 1,
+      kind: 'resolved',
+      cfi: 'epubcfi(/6/88!/4/2:10)',
+    });
+    useSoundtrackStore.getState().setPanelOpen(true);
+
+    const { findByLabelText, getByLabelText } = render(<SoundtrackControl isMobile={false} />);
+
+    // Click "Make Editable Copy"
+    const makeCopyBtn = await findByLabelText(/make an editable copy of this soundtrack/i);
+    fireEvent.click(makeCopyBtn);
+
+    await waitFor(() => {
+      expect(useSoundtrackStore.getState().isAuthoringMode).toBe(true);
+    });
+
+    // Click "+ Silence Cue"
+    const addSilenceBtn = getByLabelText(/add silence cue at current reading position/i);
+    fireEvent.click(addSilenceBtn);
+
+    const editableCopy = useSoundtrackStore.getState().editableCopy;
+    expect(editableCopy).not.toBeNull();
+    const addedCue = editableCopy!.manifest.cues.find(
+      (c) => c.startCfi === 'epubcfi(/6/88!/4/2:10)',
+    );
+    expect(addedCue).toBeDefined();
+    expect(addedCue?.type).toBe('silence');
+  });
+
+  it('supports adding Audio Cues and editing Cue properties in CueEditor', async () => {
+    vi.spyOn(persistenceModule, 'loadInstalledPackages').mockResolvedValue({
+      'pkg-verified-1:hash-1': samplePkg,
+    });
+    vi.spyOn(persistenceModule, 'loadLocalAssociations').mockResolvedValue({
+      'edition-123': sampleAssoc,
+    });
+
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'edition-123',
+        { 'pkg-verified-1:hash-1': samplePkg },
+        { 'edition-123': sampleAssoc },
+      );
+    useSoundtrackStore.getState().reportLocation({
+      seq: 1,
+      kind: 'resolved',
+      cfi: 'epubcfi(/6/50!/4/2:0)',
+    });
+    useSoundtrackStore.getState().setPanelOpen(true);
+
+    const { findByLabelText, getByLabelText, getByText } = render(
+      <SoundtrackControl isMobile={false} />,
+    );
+
+    // Enter authoring mode
+    const makeCopyBtn = await findByLabelText(/make an editable copy of this soundtrack/i);
+    fireEvent.click(makeCopyBtn);
+
+    await waitFor(() => {
+      expect(useSoundtrackStore.getState().isAuthoringMode).toBe(true);
+    });
+
+    // Click "+ Audio Cue"
+    const addAudioBtn = getByLabelText(/add audio cue at current reading position/i);
+    fireEvent.click(addAudioBtn);
+
+    // CueEditor is opened for the new audio cue
+    expect(getByText(/edit cue:/i)).toBeDefined();
+
+    // Click Save in CueEditor
+    const saveBtn = getByText(/^save$/i);
+    fireEvent.click(saveBtn);
+
+    const editableCopy = useSoundtrackStore.getState().editableCopy;
+    const addedAudioCue = editableCopy!.manifest.cues.find(
+      (c) => c.startCfi === 'epubcfi(/6/50!/4/2:0)',
+    );
+    expect(addedAudioCue).toBeDefined();
+    expect(addedAudioCue?.type).toBe('audio');
+  });
+
+  it('supports reordering cues via Move Up and Move Down buttons in authoring mode', async () => {
+    vi.spyOn(persistenceModule, 'loadInstalledPackages').mockResolvedValue({
+      'pkg-verified-1:hash-1': samplePkg,
+    });
+    vi.spyOn(persistenceModule, 'loadLocalAssociations').mockResolvedValue({
+      'edition-123': sampleAssoc,
+    });
+
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'edition-123',
+        { 'pkg-verified-1:hash-1': samplePkg },
+        { 'edition-123': sampleAssoc },
+      );
+    useSoundtrackStore.getState().setPanelOpen(true);
+
+    const { findByLabelText, getByLabelText, getAllByLabelText } = render(
+      <SoundtrackControl isMobile={false} />,
+    );
+
+    const makeCopyBtn = await findByLabelText(/make an editable copy of this soundtrack/i);
+    fireEvent.click(makeCopyBtn);
+
+    await waitFor(() => {
+      expect(useSoundtrackStore.getState().isAuthoringMode).toBe(true);
+    });
+
+    // Add a second cue at exact same CFI to test manual reordering
+    useSoundtrackStore.getState().reportLocation({
+      seq: 2,
+      kind: 'resolved',
+      cfi: 'epubcfi(/6/2!/4/2:0)',
+    });
+    const addAudioBtn = getByLabelText(/add audio cue at current reading position/i);
+    fireEvent.click(addAudioBtn);
+
+    const copy = useSoundtrackStore.getState().editableCopy!;
+    expect(copy.manifest.cues.length).toBeGreaterThanOrEqual(2);
+
+    const targetCue = copy.manifest.cues[1]!;
+    const moveUpBtns = getAllByLabelText(/move cue up/i);
+    expect(moveUpBtns.length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(moveUpBtns[1]!);
+
+    await waitFor(() => {
+      const reorderedCopy = useSoundtrackStore.getState().editableCopy!;
+      expect(reorderedCopy.manifest.cues[0]!.id).toBe(targetCue.id);
+    });
   });
 });

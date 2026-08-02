@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import {
+  EditableCopy,
   InstalledPackage,
   LocalAssociation,
   LocationReport,
@@ -15,7 +16,6 @@ import { loadRepairQueue, recordPackageRepairFailure } from '@/services/bookscor
 import { FileSystem } from '@/types/system';
 import { getInitializedAppService } from '@/services/environment';
 
-import { ttsSessionManager } from '@/services/tts/TTSSessionManager';
 import { eventDispatcher } from '@/utils/event';
 
 export interface SoundtrackStoreState {
@@ -31,6 +31,14 @@ export interface SoundtrackStoreState {
   volume: number;
   isPanelOpen: boolean;
   repairQueue: StoredRepairQueueMap;
+  currentCfi: string | null;
+
+  /** Authoring mode: an in-progress editable copy being authored. */
+  editableCopy: EditableCopy | null;
+  /** True while the user is in Authoring Mode (editing the copy). */
+  isAuthoringMode: boolean;
+  /** True while a selected-cue preview is playing. */
+  isPreviewingCue: boolean;
 
   // Actions
   setCapabilityEnabled: (enabled: boolean) => void;
@@ -52,6 +60,24 @@ export interface SoundtrackStoreState {
   togglePanel: () => void;
   setRepairQueue: (queue: StoredRepairQueueMap) => void;
   loadRepairQueueAction: (customFs?: FileSystem) => Promise<StoredRepairQueueMap>;
+
+  /**
+   * Enter Authoring Mode with the given editable copy.
+   * Stops any ongoing playback so the user is in a clean editing state.
+   */
+  enterAuthoringMode: (copy: EditableCopy) => void;
+  /** Exit Authoring Mode.  Does NOT discard the copy. */
+  exitAuthoringMode: () => void;
+  /** Replace the working EditableCopy in-store (e.g. after a cue CRUD mutation). */
+  updateEditableCopy: (copy: EditableCopy) => void;
+  /**
+   * Start a preview of the given cue using the copy's embedded asset bytes.
+   * Begins playback at the cue's configured startSec.
+   * On stop (stopCuePreview) the player is paused and status returns to 'paused'.
+   */
+  startCuePreview: (cue: SoundtrackCue) => Promise<void>;
+  /** Stop any active cue preview and return to paused state. */
+  stopCuePreview: () => void;
 }
 
 const locationSeam = new LocationReportSeam();
@@ -153,6 +179,10 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   volume: 1.0,
   isPanelOpen: false,
   repairQueue: {},
+  currentCfi: null,
+  editableCopy: null,
+  isAuthoringMode: false,
+  isPreviewingCue: false,
 
   setRepairQueue: (queue: StoredRepairQueueMap) => {
     set({ repairQueue: queue });
@@ -262,6 +292,9 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   },
 
   reportLocation: (report: LocationReport) => {
+    if (report.cfi) {
+      set({ currentCfi: report.cfi });
+    }
     const { capabilityEnabled, activePackage, isUserPlaying, isGestureUnlocked } = get();
 
     if (!capabilityEnabled || !activePackage) {
@@ -360,8 +393,16 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
         set({ playbackStatus: 'playing' });
         // Requirement: Play stops active TTS ONLY when audio playback successfully starts
         if (typeof window !== 'undefined') {
-          const activeSession = ttsSessionManager.getActiveSession();
-          const targetBookKey = activeSession?.bookKey || activeBookKey || activeEditionId || '';
+          let targetBookKey = activeBookKey || activeEditionId || '';
+          const g = globalThis as unknown as {
+            ttsSessionManager?: { getActiveSession?: () => { bookKey?: string } };
+          };
+          if (g.ttsSessionManager) {
+            const activeSession = g.ttsSessionManager.getActiveSession?.();
+            if (activeSession?.bookKey) {
+              targetBookKey = activeSession.bookKey;
+            }
+          }
           eventDispatcher.dispatch('tts-stop', { bookKey: targetBookKey });
         }
       } else {
@@ -406,6 +447,73 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
       playbackStatus: 'silence',
       isUserPlaying: false,
       isPanelOpen: false,
+      editableCopy: null,
+      isAuthoringMode: false,
+      isPreviewingCue: false,
     });
+  },
+
+  enterAuthoringMode: (copy: EditableCopy) => {
+    // Pause any active reading playback when entering authoring mode
+    if (playerInstance) {
+      playerInstance.pause();
+    }
+    set({
+      editableCopy: copy,
+      isAuthoringMode: true,
+      isPreviewingCue: false,
+      isUserPlaying: false,
+      playbackStatus: 'paused',
+    });
+  },
+
+  exitAuthoringMode: () => {
+    // Stop any preview playback on exit
+    if (playerInstance) {
+      playerInstance.pause();
+    }
+    set({
+      isAuthoringMode: false,
+      isPreviewingCue: false,
+      isUserPlaying: false,
+      playbackStatus: 'silence',
+    });
+  },
+
+  updateEditableCopy: (copy: EditableCopy) => {
+    set({ editableCopy: copy });
+  },
+
+  startCuePreview: async (cue: SoundtrackCue) => {
+    const { editableCopy, isGestureUnlocked } = get();
+    if (!editableCopy || !playerInstance) return;
+    if (cue.type !== 'audio') return;
+
+    // Unlock gesture if needed
+    let unlocked = isGestureUnlocked;
+    if (!unlocked) {
+      unlocked = await playerInstance.unlockGesture();
+      set({ isGestureUnlocked: unlocked });
+    }
+    if (!unlocked) return;
+
+    const { resolvePreviewAsset } = await import('@/services/bookscore/authoringService');
+    const previewResult = resolvePreviewAsset(editableCopy, cue);
+    if (!previewResult) return;
+
+    try {
+      // Preview always starts from configured startSec (not saved offset)
+      await playerInstance.playCue(previewResult.cue, previewResult.audioData, false);
+      set({ isPreviewingCue: true, playbackStatus: 'playing' });
+    } catch (_) {
+      set({ isPreviewingCue: false });
+    }
+  },
+
+  stopCuePreview: () => {
+    if (playerInstance) {
+      playerInstance.pause();
+    }
+    set({ isPreviewingCue: false, playbackStatus: 'paused' });
   },
 }));
