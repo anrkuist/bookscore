@@ -142,6 +142,9 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     initialCfi?: string,
     bookKey?: string,
   ) => {
+    if (playerInstance) {
+      playerInstance.transitionToSilence();
+    }
     const association = associations[editionId];
     if (!association || !association.selected) {
       set({

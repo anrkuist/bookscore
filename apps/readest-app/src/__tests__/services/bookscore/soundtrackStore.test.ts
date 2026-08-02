@@ -229,6 +229,164 @@ describe('soundtrackStore issue #15 enhancements', () => {
     expect(fakePlayer.pause).toHaveBeenCalled();
   });
 
+  it('transitions active player to silence when switching candidate packages while playing', async () => {
+    const fakePlayer = new FakeSoundtrackPlayer();
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore.getState().registerSoundtrackPlayer(fakePlayer);
+
+    vi.spyOn(assetStorageModule, 'loadSoundtrackAssetFile').mockResolvedValue(
+      new ArrayBuffer(1024),
+    );
+
+    const cue1: AudioCue = {
+      id: 'cue-1',
+      startCfi: 'epubcfi(/6/2!/4/2)',
+      type: 'audio',
+      assetId: 'asset-1',
+      startSec: 0,
+      loopStartSec: 0,
+      loopEndSec: 10,
+      volume: 1,
+      crossfadeSec: 0.5,
+    };
+
+    const pkg1: InstalledPackage = {
+      packageId: 'pkg-1',
+      manifestHash: 'hash-1',
+      installedAt: Date.now(),
+      manifest: {
+        packageId: 'pkg-1',
+        title: 'Package 1',
+        version: 1,
+        manifestHash: 'hash-1',
+        editionCompatibility: [],
+        assets: [
+          {
+            id: 'asset-1',
+            path: 'audio1.mp3',
+            mimeType: 'audio/mpeg',
+            hash: 'h1',
+            durationSec: 10,
+          },
+        ],
+        cues: [cue1],
+      },
+    };
+
+    const assoc1: LocalAssociation = {
+      editionId: 'ed-1',
+      packageId: 'pkg-1',
+      manifestHash: 'hash-1',
+      selected: true,
+      trustState: 'verified',
+    };
+
+    const pkg2: InstalledPackage = {
+      packageId: 'pkg-2',
+      manifestHash: 'hash-2',
+      installedAt: Date.now(),
+      manifest: {
+        packageId: 'pkg-2',
+        title: 'Package 2',
+        version: 1,
+        manifestHash: 'hash-2',
+        editionCompatibility: [],
+        assets: [],
+        cues: [],
+      },
+    };
+
+    const assoc2: LocalAssociation = {
+      editionId: 'ed-1',
+      packageId: 'pkg-2',
+      manifestHash: 'hash-2',
+      selected: true,
+      trustState: 'verified',
+    };
+
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook('ed-1', { 'pkg-1:hash-1': pkg1 }, { 'ed-1': assoc1 });
+
+    await useSoundtrackStore.getState().play();
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('playing');
+
+    // Switch to package 2 while playing
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook('ed-1', { 'pkg-2:hash-2': pkg2 }, { 'ed-1': assoc2 });
+
+    expect(fakePlayer.transitionToSilence).toHaveBeenCalled();
+    expect(useSoundtrackStore.getState().activePackage?.packageId).toBe('pkg-2');
+  });
+
+  it('transitions active player to silence when detaching active package while playing', async () => {
+    const fakePlayer = new FakeSoundtrackPlayer();
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore.getState().registerSoundtrackPlayer(fakePlayer);
+
+    vi.spyOn(assetStorageModule, 'loadSoundtrackAssetFile').mockResolvedValue(
+      new ArrayBuffer(1024),
+    );
+
+    const cue1: AudioCue = {
+      id: 'cue-1',
+      startCfi: 'epubcfi(/6/2!/4/2)',
+      type: 'audio',
+      assetId: 'asset-1',
+      startSec: 0,
+      loopStartSec: 0,
+      loopEndSec: 10,
+      volume: 1,
+      crossfadeSec: 0.5,
+    };
+
+    const pkg1: InstalledPackage = {
+      packageId: 'pkg-1',
+      manifestHash: 'hash-1',
+      installedAt: Date.now(),
+      manifest: {
+        packageId: 'pkg-1',
+        title: 'Package 1',
+        version: 1,
+        manifestHash: 'hash-1',
+        editionCompatibility: [],
+        assets: [
+          {
+            id: 'asset-1',
+            path: 'audio1.mp3',
+            mimeType: 'audio/mpeg',
+            hash: 'h1',
+            durationSec: 10,
+          },
+        ],
+        cues: [cue1],
+      },
+    };
+
+    const assoc1: LocalAssociation = {
+      editionId: 'ed-1',
+      packageId: 'pkg-1',
+      manifestHash: 'hash-1',
+      selected: true,
+      trustState: 'verified',
+    };
+
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook('ed-1', { 'pkg-1:hash-1': pkg1 }, { 'ed-1': assoc1 });
+
+    await useSoundtrackStore.getState().play();
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('playing');
+
+    // Detach package while playing (loadSoundtrackForBook called with empty associations)
+    useSoundtrackStore.getState().loadSoundtrackForBook('ed-1', {}, {});
+
+    expect(fakePlayer.transitionToSilence).toHaveBeenCalled();
+    expect(useSoundtrackStore.getState().activePackage).toBeNull();
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
+  });
+
   it('does NOT stop TTS and falls back to silence if audio asset resolution or playCue fails', async () => {
     const fakePlayer = new FakeSoundtrackPlayer();
     fakePlayer.playCue.mockRejectedValue(new Error('Audio decoding failed'));
