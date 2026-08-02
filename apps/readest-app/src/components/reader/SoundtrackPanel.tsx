@@ -157,7 +157,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
         previouslyFocusedElementRef.current.focus();
       }
     };
-  }, [isPanelOpen, setPanelOpen]);
+  }, [isPanelOpen, consentTarget, setPanelOpen]);
 
   if (!isEnabled || !isPanelOpen) {
     return null;
@@ -314,7 +314,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
           )}
 
           {/* Current State / Audio Card */}
-          <div className='p-3.5 rounded-xl border border-base-300 bg-base-200/40 space-y-3 eink-bordered'>
+          <div className='p-3.5 rounded-lg border border-base-300 bg-base-200/40 space-y-3 eink-bordered'>
             <div className='flex items-center justify-between gap-2'>
               <span className='text-xs font-semibold uppercase tracking-wider text-neutral-content/90'>
                 {_('Status')}
@@ -373,7 +373,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
           </div>
 
           {/* Volume Control */}
-          <div className='p-3.5 rounded-xl border border-base-300 bg-base-200/40 space-y-2 eink-bordered'>
+          <div className='p-3.5 rounded-lg border border-base-300 bg-base-200/40 space-y-2 eink-bordered'>
             <div className='flex items-center justify-between text-xs font-semibold text-neutral-content/90'>
               <span>{_('Volume')}</span>
               <span>{Math.round(volume * 100)}%</span>

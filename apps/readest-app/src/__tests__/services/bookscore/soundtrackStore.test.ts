@@ -240,4 +240,71 @@ describe('soundtrackStore issue #15 enhancements', () => {
     expect(dispatchSpy).not.toHaveBeenCalledWith('tts-stop', expect.anything());
     expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
   });
+
+  it('does NOT stop TTS and handles asset loader exception gracefully', async () => {
+    const fakePlayer = new FakeSoundtrackPlayer();
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore.getState().registerSoundtrackPlayer(fakePlayer);
+
+    const dispatchSpy = vi.spyOn(eventDispatcher, 'dispatch');
+
+    // Simulate loadSoundtrackAssetFile throwing a disk error
+    vi.spyOn(assetStorageModule, 'loadSoundtrackAssetFile').mockRejectedValue(
+      new Error('Disk read error'),
+    );
+
+    const sampleCue: AudioCue = {
+      id: 'cue-1',
+      startCfi: 'epubcfi(/6/2!/4/2)',
+      type: 'audio',
+      assetId: 'asset-1',
+      startSec: 0,
+      loopStartSec: 0,
+      loopEndSec: 10,
+      volume: 1,
+      crossfadeSec: 0.5,
+    };
+
+    const pkg: InstalledPackage = {
+      packageId: 'pkg-1',
+      manifestHash: 'hash-1',
+      installedAt: Date.now(),
+      manifest: {
+        packageId: 'pkg-1',
+        title: 'Test Package',
+        version: 1,
+        manifestHash: 'hash-1',
+        editionCompatibility: [],
+        assets: [
+          { id: 'asset-1', path: 'audio.mp3', mimeType: 'audio/mpeg', hash: 'h', durationSec: 10 },
+        ],
+        cues: [sampleCue],
+      },
+    };
+
+    const assoc: LocalAssociation = {
+      editionId: 'ed-1',
+      packageId: 'pkg-1',
+      manifestHash: 'hash-1',
+      selected: true,
+      trustState: 'verified',
+    };
+
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'ed-1',
+        { 'pkg-1:hash-1': pkg },
+        { 'ed-1': assoc },
+        undefined,
+        'ed-1-unique123',
+      );
+
+    // Call play with customFs so loadSoundtrackAssetFile is invoked and rejects
+    await useSoundtrackStore.getState().play(true, {} as any);
+
+    expect(dispatchSpy).not.toHaveBeenCalledWith('tts-stop', expect.anything());
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
+    expect(fakePlayer.transitionToSilence).toHaveBeenCalled();
+  });
 });

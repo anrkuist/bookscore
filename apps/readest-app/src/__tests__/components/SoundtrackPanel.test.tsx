@@ -245,6 +245,10 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     const cancelBtn = getByRole('button', { name: /cancel/i });
     expect(cancelBtn.className).toContain('eink-bordered');
 
+    // When modal is open, test Tab key event - panel listener should be suspended
+    cancelBtn.focus();
+    fireEvent.keyDown(window, { key: 'Tab' });
+
     // Confirm consent
     const confirmConsentBtn = getByRole('button', { name: /attach as unverified/i });
     fireEvent.click(confirmConsentBtn);

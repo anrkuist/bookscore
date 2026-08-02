@@ -70,25 +70,26 @@ async function resolveAndPlayAudioCue(
   const appSvc = getInitializedAppService();
   const fs = customFs ?? (appSvc as unknown as FileSystem | undefined);
   let audioData: ArrayBuffer | null = null;
-  if (fs) {
-    audioData = await loadSoundtrackAssetFile(
-      fs,
-      'Data',
-      pkg.packageId,
-      asset.id,
-      pkg.manifestHash,
-    );
-    if (!audioData || audioData.byteLength === 0) {
-      player.transitionToSilence();
-      return false;
-    }
-  }
 
   try {
+    if (fs) {
+      audioData = await loadSoundtrackAssetFile(
+        fs,
+        'Data',
+        pkg.packageId,
+        asset.id,
+        pkg.manifestHash,
+      );
+      if (!audioData || audioData.byteLength === 0) {
+        player.transitionToSilence();
+        return false;
+      }
+    }
+
     await player.playCue(cue, audioData ?? undefined, isResume);
     return true;
   } catch (err) {
-    console.warn('Failed to play soundtrack audio cue, falling back to safe silence:', err);
+    console.warn('Failed to load or play soundtrack audio cue, falling back to safe silence:', err);
     player.transitionToSilence();
     return false;
   }
