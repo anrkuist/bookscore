@@ -13,11 +13,13 @@ import { loadSoundtrackAssetFile } from '@/services/bookscore/assetStorage';
 import { FileSystem } from '@/types/system';
 import { getInitializedAppService } from '@/services/environment';
 
+import { ttsSessionManager } from '@/services/tts/TTSSessionManager';
 import { eventDispatcher } from '@/utils/event';
 
 export interface SoundtrackStoreState {
   capabilityEnabled: boolean;
   activeEditionId: string | null;
+  activeBookKey: string | null;
   activePackage: InstalledPackage | null;
   activeAssociation: LocalAssociation | null;
   selectedCue: SoundtrackCue | null;
@@ -35,6 +37,7 @@ export interface SoundtrackStoreState {
     packages: Record<string, InstalledPackage>,
     associations: Record<string, LocalAssociation>,
     initialCfi?: string,
+    bookKey?: string,
   ) => void;
   reportLocation: (report: LocationReport) => void;
   play: (fromGesture?: boolean, customFs?: FileSystem) => Promise<void>;
@@ -90,6 +93,7 @@ async function resolveAndPlayAudioCue(
 export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   capabilityEnabled: false,
   activeEditionId: null,
+  activeBookKey: null,
   activePackage: null,
   activeAssociation: null,
   selectedCue: null,
@@ -131,11 +135,13 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     packages: Record<string, InstalledPackage>,
     associations: Record<string, LocalAssociation>,
     initialCfi?: string,
+    bookKey?: string,
   ) => {
     const association = associations[editionId];
     if (!association || !association.selected) {
       set({
         activeEditionId: editionId,
+        activeBookKey: bookKey || editionId,
         activePackage: null,
         activeAssociation: null,
         selectedCue: null,
@@ -151,6 +157,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     if (!pkg) {
       set({
         activeEditionId: editionId,
+        activeBookKey: bookKey || editionId,
         activePackage: null,
         activeAssociation: association,
         selectedCue: null,
@@ -174,6 +181,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
 
     set({
       activeEditionId: editionId,
+      activeBookKey: bookKey || editionId,
       activePackage: pkg,
       activeAssociation: association,
       selectedCue: containingCue,
@@ -241,14 +249,10 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
       selectedCue,
       isGestureUnlocked,
       playbackStatus,
+      activeBookKey,
       activeEditionId,
     } = get();
     if (!capabilityEnabled) return;
-
-    // Requirement: Play stops active TTS
-    if (typeof window !== 'undefined') {
-      eventDispatcher.dispatch('tts-stop', { bookKey: activeEditionId || '' });
-    }
 
     let unlocked = isGestureUnlocked;
     if (fromGesture && playerInstance) {
@@ -265,6 +269,13 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     set({ isUserPlaying: true });
 
     if (selectedCue && selectedCue.type === 'audio' && activePackage && playerInstance) {
+      // Requirement: Play stops active TTS ONLY when audio playback actually starts
+      if (typeof window !== 'undefined') {
+        const activeSession = ttsSessionManager.getActiveSession();
+        const targetBookKey = activeSession?.bookKey || activeBookKey || activeEditionId || '';
+        eventDispatcher.dispatch('tts-stop', { bookKey: targetBookKey });
+      }
+
       playerInstance.setVolume?.(get().volume);
       set({ playbackStatus: 'playing' });
       const success = await resolveAndPlayAudioCue(
@@ -306,6 +317,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     }
     set({
       activeEditionId: null,
+      activeBookKey: null,
       activePackage: null,
       activeAssociation: null,
       selectedCue: null,

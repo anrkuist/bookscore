@@ -1,7 +1,7 @@
 'use client';
 
 import clsx from 'clsx';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   MdCheckCircle,
   MdClose,
@@ -49,6 +49,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
   const volume = useSoundtrackStore((s) => s.volume);
   const isPanelOpen = useSoundtrackStore((s) => s.isPanelOpen);
   const activeEditionIdFromStore = useSoundtrackStore((s) => s.activeEditionId);
+  const activeBookKeyFromStore = useSoundtrackStore((s) => s.activeBookKey);
 
   const togglePlayPause = useSoundtrackStore((s) => s.togglePlayPause);
   const setVolume = useSoundtrackStore((s) => s.setVolume);
@@ -64,20 +65,29 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
   const [consentTarget, setConsentTarget] = useState<InstalledPackage | null>(null);
   const [preMuteVolume, setPreMuteVolume] = useState<number>(1.0);
 
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
+
   const isEnabled = capabilityEnabled && isBookScoreCapabilityEnabled({ isMobile });
 
-  const refreshAttachments = async () => {
-    if (!appService) return;
+  const refreshAttachments = async (): Promise<{
+    packages: StoredPackagesMap;
+    associations: StoredAssociationsMap;
+  }> => {
+    if (!appService)
+      return { packages: {} as StoredPackagesMap, associations: {} as StoredAssociationsMap };
     try {
       const fs = appService as unknown as FileSystem;
       const pkgs = await loadInstalledPackages(fs, 'Data');
       const assocs = await loadLocalAssociations(fs, 'Data');
       setPackages(pkgs);
       setAssociations(assocs);
+      setLoading(false);
+      return { packages: pkgs, associations: assocs };
     } catch (err) {
       console.warn('Failed to load soundtrack attachments:', err);
-    } finally {
       setLoading(false);
+      return { packages: {}, associations: {} };
     }
   };
 
@@ -87,16 +97,36 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
     }
   }, [isEnabled, isPanelOpen, currentEditionId]);
 
-  // Keyboard shortcut listener: Escape key closes the panel
+  // Keyboard shortcut listener: Escape key closes the panel & Focus Lifecycle Management
   useEffect(() => {
     if (!isPanelOpen) return;
+
+    if (typeof document !== 'undefined' && document.activeElement) {
+      previouslyFocusedElementRef.current = document.activeElement as HTMLElement;
+    }
+
+    // Set initial focus to close button
+    const focusTimeout = setTimeout(() => {
+      closeBtnRef.current?.focus();
+    }, 50);
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setPanelOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+
+    return () => {
+      clearTimeout(focusTimeout);
+      window.removeEventListener('keydown', handleKeyDown);
+      if (
+        previouslyFocusedElementRef.current &&
+        typeof previouslyFocusedElementRef.current.focus === 'function'
+      ) {
+        previouslyFocusedElementRef.current.focus();
+      }
+    };
   }, [isPanelOpen, setPanelOpen]);
 
   if (!isEnabled || !isPanelOpen) {
@@ -143,8 +173,14 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
     );
 
     if (res.success) {
-      await refreshAttachments();
-      loadSoundtrackForBook(currentEditionId, packages, associations);
+      const fresh = await refreshAttachments();
+      loadSoundtrackForBook(
+        currentEditionId,
+        fresh.packages,
+        fresh.associations,
+        undefined,
+        activeBookKeyFromStore || undefined,
+      );
     } else if (res.error) {
       setErrorMsg(res.error);
     }
@@ -166,8 +202,14 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
     );
 
     if (res.success) {
-      await refreshAttachments();
-      loadSoundtrackForBook(currentEditionId, packages, associations);
+      const fresh = await refreshAttachments();
+      loadSoundtrackForBook(
+        currentEditionId,
+        fresh.packages,
+        fresh.associations,
+        undefined,
+        activeBookKeyFromStore || undefined,
+      );
     } else if (res.error) {
       setErrorMsg(res.error);
     }
@@ -179,8 +221,14 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
     const fs = appService as unknown as FileSystem;
     const res = await detachSoundtrackFromEdition(fs, 'Data', currentEditionId);
     if (res.success) {
-      await refreshAttachments();
-      loadSoundtrackForBook(currentEditionId, packages, associations);
+      const fresh = await refreshAttachments();
+      loadSoundtrackForBook(
+        currentEditionId,
+        fresh.packages,
+        fresh.associations,
+        undefined,
+        activeBookKeyFromStore || undefined,
+      );
     }
   };
 
@@ -196,22 +244,21 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
           'eink-bordered text-base-content overflow-hidden',
         )}
       >
-        {/* Panel Header */}
-        <div className='flex items-center justify-between px-4 py-3 border-b border-base-300 bg-base-200/50'>
-          <div className='flex items-center gap-2 min-w-0'>
-            <MdMusicNote className='h-5 w-5 text-primary shrink-0' />
-            <div className='min-w-0'>
-              <h2 className='text-sm font-bold truncate'>{_('Soundtrack')}</h2>
-              {activePackage && (
-                <p className='text-xs text-neutral-content truncate'>
-                  {activePackage.manifest.title} (v{activePackage.manifest.version})
-                </p>
-              )}
+        {/* Panel Header — DESIGN.md §2.9 Compliant */}
+        <div className='flex items-start justify-between px-4 py-3 border-b border-base-300 bg-base-200/50'>
+          <div className='flex items-start gap-2 min-w-0'>
+            <MdMusicNote className='h-5 w-5 text-primary shrink-0 mt-0.5' />
+            <div className='flex flex-col min-w-0'>
+              <h2 className='text-lg font-semibold tracking-tight truncate'>{_('Soundtrack')}</h2>
+              <p className='text-xs text-neutral-content truncate'>
+                {_('Manage soundtrack playback, volume, and attached packages.')}
+              </p>
             </div>
           </div>
           <button
+            ref={closeBtnRef}
             type='button'
-            className='btn btn-ghost btn-xs btn-circle eink-bordered'
+            className='btn btn-ghost btn-xs btn-circle eink-bordered shrink-0 ms-2'
             onClick={() => setPanelOpen(false)}
             aria-label={_('Close soundtrack panel')}
           >
@@ -343,7 +390,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
             </div>
 
             {loading ? (
-              <p className='text-xs text-neutral-content animate-pulse py-2'>
+              <p className='text-xs text-neutral-content not-eink:animate-pulse py-2'>
                 {_('Loading soundtrack attachments...')}
               </p>
             ) : candidates.length === 0 ? (

@@ -62,7 +62,7 @@ export const SoundtrackControl: React.FC<SoundtrackControlProps> = ({ isMobile }
           <MdMusicNote
             className={clsx(
               'h-4 w-4 text-xs',
-              isPlaying ? 'text-primary animate-pulse' : 'text-base-content/80',
+              isPlaying ? 'text-primary not-eink:animate-pulse' : 'text-base-content/80',
             )}
           />
           <span className='text-xs max-w-[100px] truncate hidden sm:inline'>

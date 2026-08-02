@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useSoundtrackStore } from '@/store/soundtrackStore';
 import { SoundtrackPlayer } from '@/services/bookscore/soundtrackPlayer';
-import { InstalledPackage, LocalAssociation, AudioCue } from '@/services/bookscore/types';
+import {
+  InstalledPackage,
+  LocalAssociation,
+  AudioCue,
+  SilenceCue,
+} from '@/services/bookscore/types';
 import { eventDispatcher } from '@/utils/event';
 
 class FakeSoundtrackPlayer implements SoundtrackPlayer {
@@ -21,6 +26,7 @@ class FakeSoundtrackPlayer implements SoundtrackPlayer {
 describe('soundtrackStore issue #15 enhancements', () => {
   beforeEach(() => {
     useSoundtrackStore.getState().resetSoundtrack();
+    vi.restoreAllMocks();
   });
 
   it('manages volume state and updates player instance', () => {
@@ -51,7 +57,7 @@ describe('soundtrackStore issue #15 enhancements', () => {
     expect(useSoundtrackStore.getState().isPanelOpen).toBe(false);
   });
 
-  it('dispatches tts-stop event when play is invoked', async () => {
+  it('dispatches tts-stop event with mounted bookKey only when audio cue will actually play', async () => {
     const fakePlayer = new FakeSoundtrackPlayer();
     useSoundtrackStore.getState().setCapabilityEnabled(true);
     useSoundtrackStore.getState().registerSoundtrackPlayer(fakePlayer);
@@ -95,15 +101,75 @@ describe('soundtrackStore issue #15 enhancements', () => {
       trustState: 'verified',
     };
 
+    // Load with full mounted bookKey (ed-1-unique123)
     useSoundtrackStore
       .getState()
-      .loadSoundtrackForBook('ed-1', { 'pkg-1:hash-1': pkg }, { 'ed-1': assoc });
+      .loadSoundtrackForBook(
+        'ed-1',
+        { 'pkg-1:hash-1': pkg },
+        { 'ed-1': assoc },
+        undefined,
+        'ed-1-unique123',
+      );
 
     await useSoundtrackStore.getState().play();
 
+    // Verify tts-stop was dispatched with full bookKey ed-1-unique123
     expect(dispatchSpy).toHaveBeenCalledWith(
       'tts-stop',
-      expect.objectContaining({ bookKey: 'ed-1' }),
+      expect.objectContaining({ bookKey: 'ed-1-unique123' }),
     );
+  });
+
+  it('does NOT stop TTS if selected scene is silence / no audio cue', async () => {
+    const fakePlayer = new FakeSoundtrackPlayer();
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore.getState().registerSoundtrackPlayer(fakePlayer);
+
+    const dispatchSpy = vi.spyOn(eventDispatcher, 'dispatch');
+
+    const silenceCue: SilenceCue = {
+      id: 'cue-silence',
+      startCfi: 'epubcfi(/6/2!/4/2)',
+      type: 'silence',
+    };
+
+    const silencePkg: InstalledPackage = {
+      packageId: 'pkg-silence',
+      manifestHash: 'hash-silence',
+      installedAt: Date.now(),
+      manifest: {
+        packageId: 'pkg-silence',
+        title: 'Silence Package',
+        version: 1,
+        manifestHash: 'hash-silence',
+        editionCompatibility: [],
+        assets: [],
+        cues: [silenceCue],
+      },
+    };
+
+    const assoc: LocalAssociation = {
+      editionId: 'ed-silence',
+      packageId: 'pkg-silence',
+      manifestHash: 'hash-silence',
+      selected: true,
+      trustState: 'verified',
+    };
+
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'ed-silence',
+        { 'pkg-silence:hash-silence': silencePkg },
+        { 'ed-silence': assoc },
+        undefined,
+        'ed-silence-999',
+      );
+
+    await useSoundtrackStore.getState().play();
+
+    // Verify tts-stop was NOT called because selected cue is silence
+    expect(dispatchSpy).not.toHaveBeenCalledWith('tts-stop', expect.anything());
   });
 });

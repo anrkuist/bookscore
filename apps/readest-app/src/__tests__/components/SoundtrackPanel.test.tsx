@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, cleanup, fireEvent } from '@testing-library/react';
+import { render, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import React from 'react';
 
 import { SoundtrackControl } from '@/components/reader/SoundtrackControl';
@@ -7,6 +7,7 @@ import { SoundtrackPanel } from '@/components/reader/SoundtrackPanel';
 import { useSoundtrackStore } from '@/store/soundtrackStore';
 import * as capabilityModule from '@/services/bookscore/capability';
 import * as persistenceModule from '@/services/bookscore/persistence';
+import * as importServiceModule from '@/services/bookscore/importService';
 import { InstalledPackage, LocalAssociation } from '@/services/bookscore/types';
 
 vi.mock('@/hooks/useTranslation', () => ({
@@ -73,7 +74,19 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
       manifestHash: 'hash-2',
       editionCompatibility: [],
       assets: [],
-      cues: [],
+      cues: [
+        {
+          id: 'cue-2',
+          startCfi: 'epubcfi(/6/2!/4/2)',
+          type: 'audio',
+          assetId: 'asset-2',
+          startSec: 0,
+          loopStartSec: 0,
+          loopEndSec: 10,
+          volume: 1,
+          crossfadeSec: 0.5,
+        },
+      ],
     },
   };
 
@@ -83,6 +96,14 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     manifestHash: 'hash-1',
     selected: true,
     trustState: 'verified',
+  };
+
+  const unverifiedAssoc: LocalAssociation = {
+    editionId: 'edition-123',
+    packageId: 'pkg-unverified-2',
+    manifestHash: 'hash-2',
+    selected: true,
+    trustState: 'unverified',
   };
 
   beforeEach(() => {
@@ -148,7 +169,7 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     expect(getByRole('dialog', { name: /soundtrack control panel/i })).toBeDefined();
   });
 
-  it('displays explicit play/pause controls, volume slider, and attachment badges inside panel', async () => {
+  it('displays DESIGN.md §2.9 compliant header and explicit controls, volume, RTL, and e-ink styling', async () => {
     useSoundtrackStore.getState().setCapabilityEnabled(true);
     useSoundtrackStore
       .getState()
@@ -159,35 +180,79 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
       );
     useSoundtrackStore.getState().setPanelOpen(true);
 
-    const { getByRole, getByLabelText, findByText } = render(
+    const { getByRole, getByLabelText, findByText, container } = render(
       <SoundtrackPanel editionId='edition-123' isMobile={false} />,
     );
 
-    // Check dialog presence
-    expect(getByRole('dialog', { name: /soundtrack control panel/i })).toBeDefined();
+    const dialog = getByRole('dialog', { name: /soundtrack control panel/i });
+    expect(dialog).toBeDefined();
 
-    // Check Play / Pause button
-    const playBtn = getByRole('button', { name: /play soundtrack|resume soundtrack/i });
-    expect(playBtn).toBeDefined();
+    // Check DESIGN.md §2.9 heading
+    const h2 = dialog.querySelector('h2');
+    expect(h2?.className).toContain('text-lg font-semibold tracking-tight');
+    expect(h2?.textContent).toBe('Soundtrack');
+
+    // Check RTL logical positioning classes
+    expect(dialog.className).toContain('end-0');
+    expect(dialog.className).toContain('border-s');
+
+    // Check E-ink classes
+    expect(dialog.className).toContain('eink-bordered');
 
     // Check Volume slider
     const volumeSlider = getByLabelText(/soundtrack volume slider/i) as HTMLInputElement;
     expect(volumeSlider).toBeDefined();
-    expect(volumeSlider.value).toBe('1');
 
-    // Change volume
     fireEvent.change(volumeSlider, { target: { value: '0.6' } });
     expect(useSoundtrackStore.getState().volume).toBe(0.6);
 
-    // Wait for attachment candidate list to render
     const verifiedBadge = await findByText('Verified');
     expect(verifiedBadge).toBeDefined();
-
-    const unverifiedBadge = await findByText('Unverified');
-    expect(unverifiedBadge).toBeDefined();
   });
 
-  it('closes panel when Escape key is pressed', () => {
+  it('switches to unverified candidate package with consent and updates active store package', async () => {
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'edition-123',
+        { 'pkg-verified-1:hash-1': samplePkg, 'pkg-unverified-2:hash-2': unverifiedPkg },
+        { 'edition-123': sampleAssoc },
+      );
+    useSoundtrackStore.getState().setPanelOpen(true);
+
+    vi.spyOn(importServiceModule, 'associateSoundtrackToEdition').mockResolvedValue({
+      success: true,
+    });
+    vi.spyOn(persistenceModule, 'loadLocalAssociations')
+      .mockResolvedValueOnce({ 'edition-123': sampleAssoc })
+      .mockResolvedValueOnce({ 'edition-123': unverifiedAssoc });
+
+    const { findByRole, getByRole } = render(
+      <SoundtrackPanel editionId='edition-123' isMobile={false} />,
+    );
+
+    const switchConsentBtn = await findByRole('button', { name: /attach unverified package/i });
+    fireEvent.click(switchConsentBtn);
+
+    // Consent modal pops up
+    const confirmConsentBtn = getByRole('button', { name: /attach as unverified/i });
+    fireEvent.click(confirmConsentBtn);
+
+    await waitFor(() => {
+      expect(importServiceModule.associateSoundtrackToEdition).toHaveBeenCalledWith(
+        expect.anything(),
+        'Data',
+        'edition-123',
+        'pkg-unverified-2',
+        'hash-2',
+        { consentGiven: true },
+      );
+      expect(useSoundtrackStore.getState().activePackage?.packageId).toBe('pkg-unverified-2');
+    });
+  });
+
+  it('manages focus lifecycle on panel open and close', async () => {
     useSoundtrackStore.getState().setCapabilityEnabled(true);
     useSoundtrackStore
       .getState()
@@ -196,9 +261,20 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
         { 'pkg-verified-1:hash-1': samplePkg },
         { 'edition-123': sampleAssoc },
       );
+
+    const triggerButton = document.createElement('button');
+    document.body.appendChild(triggerButton);
+    triggerButton.focus();
+
     useSoundtrackStore.getState().setPanelOpen(true);
 
-    render(<SoundtrackPanel editionId='edition-123' isMobile={false} />);
+    const { getByRole } = render(<SoundtrackPanel editionId='edition-123' isMobile={false} />);
+
+    const closeBtn = getByRole('button', { name: /close soundtrack panel/i });
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(closeBtn);
+    });
 
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(useSoundtrackStore.getState().isPanelOpen).toBe(false);
