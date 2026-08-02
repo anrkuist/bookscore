@@ -33,9 +33,9 @@ import {
   createMinimalValidMp3Bytes,
   importAndAssociateBookScorePackage,
 } from '@/services/bookscore/importService';
-import { loadInstalledPackages, loadLocalAssociations } from '@/services/bookscore/persistence';
+import { loadInstalledPackages } from '@/services/bookscore/persistence';
 import { importAndAssociateBookScorePackage as reimport } from '@/services/bookscore/importService';
-import { AudioCue, EditableCopy, SilenceCue, SoundtrackCue } from '@/services/bookscore/types';
+import { AudioCue, EditableCopy, SilenceCue } from '@/services/bookscore/types';
 
 import { createTestFileSystem } from './testHelpers';
 
@@ -506,7 +506,6 @@ describe('exportEditableCopy – #17 export/import contract', () => {
   });
 
   it('returns error when validation fails (has blocking issues)', async () => {
-    const mp3 = createMinimalValidMp3Bytes();
     const emptyCopy: EditableCopy = {
       copyId: 'copy-no-cues',
       sourcePackageId: 'src',

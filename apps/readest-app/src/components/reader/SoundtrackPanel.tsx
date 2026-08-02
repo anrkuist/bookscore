@@ -44,7 +44,6 @@ import {
 import {
   AudioCue,
   CueValidationIssue,
-  EditableCopy,
   InstalledPackage,
   SilenceCue,
   SoundtrackCandidate,
@@ -444,7 +443,11 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
       }
       // Trigger download in browser
       if (typeof window !== 'undefined') {
-        const blob = new Blob([result.archiveBytes], { type: 'application/zip' });
+        const buf = result.archiveBytes.buffer.slice(
+          result.archiveBytes.byteOffset,
+          result.archiveBytes.byteOffset + result.archiveBytes.byteLength,
+        ) as ArrayBuffer;
+        const blob = new Blob([buf], { type: 'application/zip' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
