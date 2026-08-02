@@ -341,18 +341,20 @@ export async function importAndAssociateBookScorePackage(
     const pkgToUse = existingPackage ?? pkg;
 
     // 1. Persist extracted asset audio files to app storage (namespaced by manifestHash)
-    const { loadSoundtrackAssetFile } = await import('./assetStorage');
+    const { verifySoundtrackAsset, saveSoundtrackAssetFile } = await import('./assetStorage');
 
     for (const [assetId, bytes] of valRes.assetFiles.entries()) {
       if (isAlreadyInstalled) {
-        const existingData = await loadSoundtrackAssetFile(
+        const manifestAsset = pkg.manifest.assets.find((a) => a.id === assetId);
+        const verifyRes = await verifySoundtrackAsset(
           fs,
           baseDir,
           pkg.packageId,
           assetId,
           pkg.manifestHash,
+          manifestAsset?.hash,
         );
-        if (existingData) {
+        if (verifyRes.ok) {
           continue;
         }
       }

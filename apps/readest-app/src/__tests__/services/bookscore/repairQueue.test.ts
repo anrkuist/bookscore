@@ -18,95 +18,7 @@ import {
 } from '@/services/bookscore/importService';
 import { useSoundtrackStore } from '@/store/soundtrackStore';
 
-class NodeTestFileSystem {
-  constructor(private rootDir: string) {}
-
-  resolvePath(fp: string, base: BaseDir) {
-    return {
-      baseDir: 0,
-      basePrefix: async () => this.rootDir,
-      fp,
-      base,
-    };
-  }
-
-  getURL(pathStr: string) {
-    return `file://${path.join(this.rootDir, pathStr)}`;
-  }
-
-  async getBlobURL(pathStr: string): Promise<string> {
-    return this.getURL(pathStr);
-  }
-
-  async getImageURL(pathStr: string): Promise<string> {
-    return this.getURL(pathStr);
-  }
-
-  async openFile(pathStr: string): Promise<File> {
-    const fullPath = path.join(this.rootDir, pathStr);
-    const buf = await fsPromises.readFile(fullPath);
-    return new File([buf], path.basename(pathStr));
-  }
-
-  async copyFile(srcPath: string, _srcBase: BaseDir, dstPath: string): Promise<void> {
-    const src = path.join(this.rootDir, srcPath);
-    const dst = path.join(this.rootDir, dstPath);
-    await fsPromises.mkdir(path.dirname(dst), { recursive: true });
-    await fsPromises.copyFile(src, dst);
-  }
-
-  async readFile(
-    pathStr: string,
-    _base: BaseDir,
-    mode?: 'text' | 'binary',
-  ): Promise<string | ArrayBuffer> {
-    const fullPath = path.join(this.rootDir, pathStr);
-    if (mode === 'binary') {
-      const buf = await fsPromises.readFile(fullPath);
-      return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-    }
-    return fsPromises.readFile(fullPath, 'utf8');
-  }
-
-  async writeFile(
-    pathStr: string,
-    _base: BaseDir,
-    data: string | ArrayBuffer | Uint8Array | File,
-  ): Promise<void> {
-    const fullPath = path.join(this.rootDir, pathStr);
-    await fsPromises.mkdir(path.dirname(fullPath), { recursive: true });
-    if (typeof data === 'string') {
-      await fsPromises.writeFile(fullPath, data, 'utf8');
-    } else if (data instanceof ArrayBuffer || data?.constructor?.name === 'ArrayBuffer') {
-      await fsPromises.writeFile(fullPath, Buffer.from(data as ArrayBuffer));
-    } else if ('buffer' in data && data.buffer) {
-      const view = data as Uint8Array;
-      await fsPromises.writeFile(
-        fullPath,
-        Buffer.from(view.buffer, view.byteOffset, view.byteLength),
-      );
-    }
-  }
-
-  async exists(pathStr: string, _base: BaseDir): Promise<boolean> {
-    const fullPath = path.join(this.rootDir, pathStr);
-    try {
-      await fsPromises.access(fullPath);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async remove(pathStr: string, _base: BaseDir): Promise<void> {
-    const fullPath = path.join(this.rootDir, pathStr);
-    await fsPromises.rm(fullPath, { recursive: true, force: true });
-  }
-
-  async deleteFile(pathStr: string, _base: BaseDir): Promise<void> {
-    return this.remove(pathStr, _base);
-  }
-}
+import { createTestFileSystem } from './testHelpers';
 
 describe('Soundtrack Repair Queue & Failure Recovery (Issue #16)', () => {
   let tmpDir: string;
@@ -116,7 +28,7 @@ describe('Soundtrack Repair Queue & Failure Recovery (Issue #16)', () => {
 
   beforeEach(async () => {
     tmpDir = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'bookscore-repair-test-'));
-    fs = new NodeTestFileSystem(tmpDir) as unknown as FileSystem;
+    fs = createTestFileSystem(tmpDir);
     useSoundtrackStore.setState({
       capabilityEnabled: true,
       activeEditionId: null,
@@ -446,5 +358,96 @@ describe('Soundtrack Repair Queue & Failure Recovery (Issue #16)', () => {
     });
 
     expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
+  });
+
+  it('end-to-end: restores corrupt/0-byte asset bytes on re-import and allows successful playback', async () => {
+    const fixtureBytes = await createDevelopmentFixturePackageBytes(
+      undefined,
+      'pkg-e2e-repair',
+      'E2E Repair Soundtrack',
+      editionId,
+    );
+
+    // 1. Initial import & attach
+    const importRes = await importAndAssociateBookScorePackage(
+      fs,
+      baseDir,
+      fixtureBytes,
+      editionId,
+      undefined,
+      { autoAttach: true },
+    );
+    expect(importRes.success).toBe(true);
+    const pkg = importRes.package!;
+
+    // 2. Corrupt asset file on disk (write 0-byte unreadable file)
+    const assetPath = `soundtracks/${pkg.packageId}/${pkg.manifestHash}/asset-main.mp3`;
+    await fs.writeFile(assetPath, baseDir, new Uint8Array(0).buffer);
+
+    // 3. Load book & attempt playback -> fails and enters repair queue
+    let packages = await loadInstalledPackages(fs, baseDir);
+    let associations = await loadLocalAssociations(fs, baseDir);
+
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(editionId, packages, associations, 'epubcfi(/6/2!/4/2:0)', editionId);
+
+    let playedCue: unknown = null;
+    const mockPlayer = {
+      isUnlocked: () => true,
+      unlockGesture: async () => true,
+      playCue: async (cue: unknown) => {
+        playedCue = cue;
+      },
+      transitionToSilence: async () => {},
+      pause: () => {},
+      stop: () => {},
+      dispose: async () => {},
+      getCurrentCue: () => null,
+      getSavedOffset: () => undefined,
+      setVolume: () => {},
+      getVolume: () => 1.0,
+    };
+
+    useSoundtrackStore.getState().registerSoundtrackPlayer(mockPlayer);
+
+    await useSoundtrackStore.getState().play(false, fs);
+
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
+    let repairQueue = await loadRepairQueue(fs, baseDir);
+    expect(repairQueue[`${pkg.packageId}:${pkg.manifestHash}`]).toBeDefined();
+
+    // 4. Re-import package archive to repair
+    const reImportRes = await importAndAssociateBookScorePackage(
+      fs,
+      baseDir,
+      fixtureBytes,
+      editionId,
+      undefined,
+      { autoAttach: true },
+    );
+    expect(reImportRes.success).toBe(true);
+
+    // 5. Verify asset bytes on disk are restored (non-zero byte length)
+    const restoredBuffer = (await fs.readFile(assetPath, baseDir, 'binary')) as ArrayBuffer;
+    expect(restoredBuffer).not.toBeNull();
+    expect(restoredBuffer.byteLength).toBeGreaterThan(0);
+
+    // 6. Verify Repair Queue is cleared
+    repairQueue = await loadRepairQueue(fs, baseDir);
+    expect(repairQueue[`${pkg.packageId}:${pkg.manifestHash}`]).toBeUndefined();
+
+    // 7. Load soundtrack again & trigger play -> playback succeeds and cue is played
+    packages = await loadInstalledPackages(fs, baseDir);
+    associations = await loadLocalAssociations(fs, baseDir);
+
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(editionId, packages, associations, 'epubcfi(/6/2!/4/2:0)', editionId);
+
+    await useSoundtrackStore.getState().play(false, fs);
+
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('playing');
+    expect(playedCue).not.toBeNull();
   });
 });
