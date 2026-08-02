@@ -199,8 +199,11 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     expect(dialog.className).toContain('end-0');
     expect(dialog.className).toContain('border-s');
 
-    // Check E-ink classes
+    // Check E-ink classes on panel and Detach button
     expect(dialog.className).toContain('eink-bordered');
+
+    const detachBtn = getByRole('button', { name: /detach/i });
+    expect(detachBtn.className).toContain('eink-bordered');
 
     // Check Volume slider
     const volumeSlider = getByLabelText(/soundtrack volume slider/i) as HTMLInputElement;
@@ -213,7 +216,7 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     expect(verifiedBadge).toBeDefined();
   });
 
-  it('switches to unverified candidate package with consent and updates active store package', async () => {
+  it('switches to unverified candidate package with consent modal eink styling and keyboard independence', async () => {
     useSoundtrackStore.getState().setCapabilityEnabled(true);
     useSoundtrackStore
       .getState()
@@ -238,7 +241,11 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     const switchConsentBtn = await findByRole('button', { name: /attach unverified package/i });
     fireEvent.click(switchConsentBtn);
 
-    // Consent modal pops up
+    // Consent modal pops up - check eink-bordered on Cancel button
+    const cancelBtn = getByRole('button', { name: /cancel/i });
+    expect(cancelBtn.className).toContain('eink-bordered');
+
+    // Confirm consent
     const confirmConsentBtn = getByRole('button', { name: /attach as unverified/i });
     fireEvent.click(confirmConsentBtn);
 
@@ -252,6 +259,8 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
         { consentGiven: true },
       );
       expect(useSoundtrackStore.getState().activePackage?.packageId).toBe('pkg-unverified-2');
+      // Panel stays open after modal closes
+      expect(useSoundtrackStore.getState().isPanelOpen).toBe(true);
     });
   });
 

@@ -78,6 +78,10 @@ async function resolveAndPlayAudioCue(
       asset.id,
       pkg.manifestHash,
     );
+    if (!audioData || audioData.byteLength === 0) {
+      player.transitionToSilence();
+      return false;
+    }
   }
 
   try {

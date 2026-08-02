@@ -177,11 +177,14 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
     }
 
     const source = ctx.createBufferSource();
-    if (audioData) {
+    if (audioData && audioData.byteLength > 0) {
       try {
         const buffer = await ctx.decodeAudioData(audioData);
         (source as unknown as { buffer: unknown }).buffer = buffer;
-      } catch (_) {}
+      } catch (err) {
+        await this.transitionToSilence();
+        throw err;
+      }
     }
 
     source.loop = true;

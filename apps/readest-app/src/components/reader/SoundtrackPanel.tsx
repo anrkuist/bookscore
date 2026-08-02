@@ -100,7 +100,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
 
   // Keyboard focus lifecycle & Tab/Shift+Tab focus containment
   useEffect(() => {
-    if (!isPanelOpen) return;
+    if (!isPanelOpen || consentTarget) return;
 
     if (typeof document !== 'undefined' && document.activeElement) {
       previouslyFocusedElementRef.current = document.activeElement as HTMLElement;
@@ -413,7 +413,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
               {activeAssociation && (
                 <button
                   type='button'
-                  className='btn btn-xs btn-ghost border border-base-300 text-xs'
+                  className='btn btn-xs btn-ghost border border-base-300 text-xs eink-bordered'
                   onClick={handleDetachActive}
                 >
                   {_('Detach')}
@@ -538,7 +538,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
             <div className='flex justify-end gap-2 pt-2'>
               <button
                 type='button'
-                className='btn btn-sm btn-ghost'
+                className='btn btn-sm btn-ghost eink-bordered'
                 onClick={() => setConsentTarget(null)}
               >
                 {_('Cancel')}

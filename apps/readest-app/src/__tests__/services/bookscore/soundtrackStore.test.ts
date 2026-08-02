@@ -8,6 +8,7 @@ import {
   SilenceCue,
 } from '@/services/bookscore/types';
 import { eventDispatcher } from '@/utils/event';
+import * as assetStorageModule from '@/services/bookscore/assetStorage';
 
 class FakeSoundtrackPlayer implements SoundtrackPlayer {
   isUnlocked = vi.fn(() => true);
@@ -63,6 +64,9 @@ describe('soundtrackStore issue #15 enhancements', () => {
     useSoundtrackStore.getState().registerSoundtrackPlayer(fakePlayer);
 
     const dispatchSpy = vi.spyOn(eventDispatcher, 'dispatch');
+    vi.spyOn(assetStorageModule, 'loadSoundtrackAssetFile').mockResolvedValue(
+      new ArrayBuffer(1024),
+    );
 
     const sampleCue: AudioCue = {
       id: 'cue-1',
@@ -173,19 +177,21 @@ describe('soundtrackStore issue #15 enhancements', () => {
     expect(dispatchSpy).not.toHaveBeenCalledWith('tts-stop', expect.anything());
   });
 
-  it('does NOT stop TTS and falls back to silence if audio asset resolution fails', async () => {
+  it('does NOT stop TTS and falls back to silence if audio asset resolution or playCue fails', async () => {
     const fakePlayer = new FakeSoundtrackPlayer();
+    fakePlayer.playCue.mockRejectedValue(new Error('Audio decoding failed'));
+
     useSoundtrackStore.getState().setCapabilityEnabled(true);
     useSoundtrackStore.getState().registerSoundtrackPlayer(fakePlayer);
 
     const dispatchSpy = vi.spyOn(eventDispatcher, 'dispatch');
+    vi.spyOn(assetStorageModule, 'loadSoundtrackAssetFile').mockResolvedValue(null);
 
-    // Cue references missing asset asset-missing
     const brokenCue: AudioCue = {
       id: 'cue-broken',
       startCfi: 'epubcfi(/6/2!/4/2)',
       type: 'audio',
-      assetId: 'asset-missing',
+      assetId: 'asset-1',
       startSec: 0,
       loopStartSec: 0,
       loopEndSec: 10,
@@ -203,7 +209,9 @@ describe('soundtrackStore issue #15 enhancements', () => {
         version: 1,
         manifestHash: 'hash-broken',
         editionCompatibility: [],
-        assets: [], // missing asset-missing
+        assets: [
+          { id: 'asset-1', path: 'audio.mp3', mimeType: 'audio/mpeg', hash: 'h', durationSec: 10 },
+        ],
         cues: [brokenCue],
       },
     };
@@ -228,7 +236,7 @@ describe('soundtrackStore issue #15 enhancements', () => {
 
     await useSoundtrackStore.getState().play();
 
-    // Verify tts-stop was NOT called when audio asset resolution failed
+    // Verify tts-stop was NOT called when audio asset resolution returned null / failed
     expect(dispatchSpy).not.toHaveBeenCalledWith('tts-stop', expect.anything());
     expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
   });
