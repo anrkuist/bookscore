@@ -29,6 +29,7 @@
     "test:browser": "dotenv -e .env -e .env.test.local -- vitest run --config vitest.browser.config.mts",
     "test:tauri": "bash scripts/test-tauri.sh",
     "test:android": "bash scripts/test-android.sh",
+    "test:macos:validation": "bash scripts/test-installed-macos.sh",
     "test:pr:web:unit": "dotenv -e .env -e .env.test.local -- vitest run --maxWorkers=4",
     "test:pr:web": "pnpm test:pr:web:unit && pnpm test:browser && pnpm test:extension && pnpm build-browser-ext",
     "test:pr:tauri": "bash scripts/test-tauri.sh",

@@ -5,7 +5,6 @@ vi.mock('@/services/tts/TTSController', () => ({
   DEFAULT_PARAGRAPH_GAP_SEC: 0.5,
 }));
 import { render, cleanup, fireEvent, waitFor } from '@testing-library/react';
-import React from 'react';
 
 import { SoundtrackControl } from '@/components/reader/SoundtrackControl';
 import { SoundtrackPanel } from '@/components/reader/SoundtrackPanel';
