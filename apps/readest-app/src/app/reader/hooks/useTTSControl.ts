@@ -29,6 +29,7 @@ import {
   ttsSessionManager,
   TTS_STOP_AT_CHAPTER_END,
 } from '@/services/tts/TTSSessionManager';
+import { useSoundtrackStore } from '@/store/soundtrackStore';
 
 interface UseTTSControlProps {
   bookKey: string;
@@ -148,6 +149,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
       emitPlaybackState('paused');
       await ttsController.pause();
     } else {
+      useSoundtrackStore.getState().pause();
       setIsPlaying(true);
       setIsPaused(false);
       emitPlaybackState('playing');
@@ -707,6 +709,7 @@ export const useTTSControl = ({ bookKey, onRequestHidePanel }: UseTTSControlProp
     // end up creating two TTSController instances that speak simultaneously.
     if (isStartingTTSRef.current) return;
     isStartingTTSRef.current = true;
+    useSoundtrackStore.getState().pause();
 
     try {
       const view = getView(bookKey);

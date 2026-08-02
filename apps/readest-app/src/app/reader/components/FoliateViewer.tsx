@@ -299,7 +299,7 @@ const FoliateViewer: React.FC<{
         const fs = appSvc as unknown as FileSystem;
         ensureBookScoreFixtureInstalled(fs, 'Data', editionId)
           .then(({ packages, associations }) => {
-            store.loadSoundtrackForBook(editionId, packages, associations, initialCfi);
+            store.loadSoundtrackForBook(editionId, packages, associations, initialCfi, bookKey);
           })
           .catch((err) => {
             console.warn('Failed to load or install soundtrack fixture persistence:', err);
