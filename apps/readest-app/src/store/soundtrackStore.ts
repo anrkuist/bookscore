@@ -13,14 +13,19 @@ import { loadSoundtrackAssetFile } from '@/services/bookscore/assetStorage';
 import { FileSystem } from '@/types/system';
 import { getInitializedAppService } from '@/services/environment';
 
+import { eventDispatcher } from '@/utils/event';
+
 export interface SoundtrackStoreState {
   capabilityEnabled: boolean;
+  activeEditionId: string | null;
   activePackage: InstalledPackage | null;
   activeAssociation: LocalAssociation | null;
   selectedCue: SoundtrackCue | null;
   playbackStatus: PlaybackStatus;
   isGestureUnlocked: boolean;
   isUserPlaying: boolean;
+  volume: number;
+  isPanelOpen: boolean;
 
   // Actions
   setCapabilityEnabled: (enabled: boolean) => void;
@@ -36,6 +41,9 @@ export interface SoundtrackStoreState {
   pause: () => void;
   togglePlayPause: (customFs?: FileSystem) => Promise<void>;
   resetSoundtrack: () => void;
+  setVolume: (volume: number) => void;
+  setPanelOpen: (open: boolean) => void;
+  togglePanel: () => void;
 }
 
 const locationSeam = new LocationReportSeam();
@@ -81,12 +89,15 @@ async function resolveAndPlayAudioCue(
 
 export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   capabilityEnabled: false,
+  activeEditionId: null,
   activePackage: null,
   activeAssociation: null,
   selectedCue: null,
   playbackStatus: 'silence',
   isGestureUnlocked: false,
   isUserPlaying: false,
+  volume: 1.0,
+  isPanelOpen: false,
 
   setCapabilityEnabled: (enabled: boolean) => {
     set({ capabilityEnabled: enabled });
@@ -94,6 +105,25 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
 
   registerSoundtrackPlayer: (player: SoundtrackPlayer | null) => {
     playerInstance = player;
+    if (playerInstance) {
+      playerInstance.setVolume?.(get().volume);
+    }
+  },
+
+  setVolume: (volume: number) => {
+    const clamped = Math.min(1, Math.max(0, volume));
+    set({ volume: clamped });
+    if (playerInstance) {
+      playerInstance.setVolume?.(clamped);
+    }
+  },
+
+  setPanelOpen: (open: boolean) => {
+    set({ isPanelOpen: open });
+  },
+
+  togglePanel: () => {
+    set((state) => ({ isPanelOpen: !state.isPanelOpen }));
   },
 
   loadSoundtrackForBook: (
@@ -105,6 +135,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     const association = associations[editionId];
     if (!association || !association.selected) {
       set({
+        activeEditionId: editionId,
         activePackage: null,
         activeAssociation: null,
         selectedCue: null,
@@ -119,6 +150,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
 
     if (!pkg) {
       set({
+        activeEditionId: editionId,
         activePackage: null,
         activeAssociation: association,
         selectedCue: null,
@@ -141,6 +173,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     }
 
     set({
+      activeEditionId: editionId,
       activePackage: pkg,
       activeAssociation: association,
       selectedCue: containingCue,
@@ -202,9 +235,20 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   },
 
   play: async (fromGesture = true, customFs?: FileSystem) => {
-    const { capabilityEnabled, activePackage, selectedCue, isGestureUnlocked, playbackStatus } =
-      get();
+    const {
+      capabilityEnabled,
+      activePackage,
+      selectedCue,
+      isGestureUnlocked,
+      playbackStatus,
+      activeEditionId,
+    } = get();
     if (!capabilityEnabled) return;
+
+    // Requirement: Play stops active TTS
+    if (typeof window !== 'undefined') {
+      eventDispatcher.dispatch('tts-stop', { bookKey: activeEditionId || '' });
+    }
 
     let unlocked = isGestureUnlocked;
     if (fromGesture && playerInstance) {
@@ -221,6 +265,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
     set({ isUserPlaying: true });
 
     if (selectedCue && selectedCue.type === 'audio' && activePackage && playerInstance) {
+      playerInstance.setVolume?.(get().volume);
       set({ playbackStatus: 'playing' });
       const success = await resolveAndPlayAudioCue(
         selectedCue,
@@ -260,11 +305,13 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
       playerInstance = null;
     }
     set({
+      activeEditionId: null,
       activePackage: null,
       activeAssociation: null,
       selectedCue: null,
       playbackStatus: 'silence',
       isUserPlaying: false,
+      isPanelOpen: false,
     });
   },
 }));

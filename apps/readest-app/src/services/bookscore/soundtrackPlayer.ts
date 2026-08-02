@@ -44,6 +44,8 @@ export interface SoundtrackPlayer {
   dispose(): Promise<void>;
   getCurrentCue(): AudioCue | null;
   getSavedOffset(cueId: string): number | undefined;
+  setVolume(volume: number): void;
+  getVolume(): number;
 }
 
 export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
@@ -53,6 +55,7 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
   private activeSource: SoundSourceNode | null = null;
   private currentCue: AudioCue | null = null;
   private gestureUnlocked = false;
+  private masterVolume = 1.0;
 
   private cueStartTime = 0;
   private cueStartOffset = 0;
@@ -68,7 +71,19 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
   private initNodes() {
     if (!this.ctx) return;
     this.masterGain = this.ctx.createGain();
+    this.masterGain.gain.setValueAtTime(this.masterVolume, this.ctx.currentTime);
     this.masterGain.connect(this.ctx.destination);
+  }
+
+  public setVolume(volume: number): void {
+    this.masterVolume = Math.min(1, Math.max(0, volume));
+    if (this.masterGain && this.ctx) {
+      this.masterGain.gain.setValueAtTime(this.masterVolume, this.ctx.currentTime);
+    }
+  }
+
+  public getVolume(): number {
+    return this.masterVolume;
   }
 
   private ensureContext(): AudioContextInterface | null {

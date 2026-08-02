@@ -172,6 +172,8 @@ describe('Reopen-Selected-But-Paused Semantics & Capability Gating', () => {
       dispose: async () => {},
       getCurrentCue: () => null,
       getSavedOffset: () => undefined,
+      setVolume: () => {},
+      getVolume: () => 1.0,
     };
 
     store.registerSoundtrackPlayer(mockPlayer);
