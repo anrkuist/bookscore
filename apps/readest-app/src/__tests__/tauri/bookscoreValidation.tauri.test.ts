@@ -45,6 +45,7 @@ describe('Tauri WebView BookScore Validation', () => {
     // Create a helper to instantiate the player with a wrapped/spied context
     interface TrackedSource {
       src: AudioBufferSourceNode;
+      startSpy: ReturnType<typeof vi.fn>;
       stopSpy: ReturnType<typeof vi.fn>;
       disconnectSpy: ReturnType<typeof vi.fn>;
     }
@@ -96,10 +97,11 @@ describe('Tauri WebView BookScore Validation', () => {
         decodeAudioData: (buf: ArrayBuffer) => realCtx.decodeAudioData(buf),
         createBufferSource: () => {
           const src = realCtx.createBufferSource();
+          const startSpy = vi.spyOn(src, 'start');
           const stopSpy = vi.spyOn(src, 'stop');
           const disconnectSpy = vi.spyOn(src, 'disconnect');
           lastCreatedSource = src;
-          createdSources.push({ src, stopSpy, disconnectSpy });
+          createdSources.push({ src, startSpy, stopSpy, disconnectSpy });
           return src;
         },
       };
@@ -144,8 +146,8 @@ describe('Tauri WebView BookScore Validation', () => {
       }
     });
 
-    it('should handle pause and resume by saving the correct offset', async () => {
-      const { player, realCtx, getLastSource } = createSpiedPlayer();
+    it('should handle pause and resume by saving and passing the correct offset to source.start', async () => {
+      const { player, realCtx, getCreatedSources } = createSpiedPlayer();
       const cue = createTestAudioCue({ startSec: 0.2, loopStartSec: 0.5, loopEndSec: 2.0 });
       const validBytes = createMinimalValidMp3Bytes();
 
@@ -153,8 +155,12 @@ describe('Tauri WebView BookScore Validation', () => {
         await player.unlockGesture();
         await player.playCue(cue, validBytes.buffer as ArrayBuffer);
 
-        const source1 = getLastSource();
-        expect(source1).not.toBeNull();
+        const sourcesBeforePause = getCreatedSources();
+        expect(sourcesBeforePause.length).toBe(1);
+        const source1 = sourcesBeforePause[0];
+        expect(source1).toBeDefined();
+        // Initial play must start at cue.startSec (0.2)
+        expect(source1!.startSpy).toHaveBeenCalledWith(expect.any(Number), 0.2);
 
         // Pause the player
         player.pause();
@@ -163,14 +169,19 @@ describe('Tauri WebView BookScore Validation', () => {
         expect(savedOffset).toBeGreaterThanOrEqual(0.2);
         expect(player.getCurrentCue()?.id).toBe(cue.id);
 
-        // Resume playback
+        // Resume playback (isResume = true)
         await player.playCue(cue, validBytes.buffer as ArrayBuffer, true);
-        const source2 = getLastSource();
-        expect(source2).not.toBeNull();
-        expect(source2).not.toBe(source1); // New source node must be created
+        const sourcesAfterResume = getCreatedSources();
+        expect(sourcesAfterResume.length).toBe(2);
+        const source2 = sourcesAfterResume[1];
+        expect(source2).toBeDefined();
+        expect(source2!.src).not.toBe(source1!.src);
+
+        // Explicitly assert that source2.start was invoked with savedOffset
+        expect(source2!.startSpy).toHaveBeenCalledWith(expect.any(Number), savedOffset);
 
         console.log(
-          '[PASS] Player successfully paused and resumed with saved offset:',
+          '[PASS] Player successfully paused and resumed with start offset:',
           savedOffset,
         );
       } finally {
@@ -202,7 +213,37 @@ describe('Tauri WebView BookScore Validation', () => {
       }
     });
 
-    it('should transition active playback to silence and propagate errors on decode failure', async () => {
+    it('should transition to silence and propagate errors on silence-first decode failures', async () => {
+      const { player, realCtx, getCreatedSources } = createSpiedPlayer();
+      const corruptCue = createTestAudioCue({ id: 'cue-corrupt-silence-first' });
+      const corruptBytes = createCorruptMp3Bytes();
+
+      try {
+        await player.unlockGesture();
+        expect(player.getCurrentCue()).toBeNull();
+
+        // Silence-first decode failure: play cue with invalid bytes from clean idle state
+        await expect(
+          player.playCue(corruptCue, corruptBytes.buffer as ArrayBuffer),
+        ).rejects.toThrow();
+
+        // Player must remain in silent/null state with no active cue or started source nodes
+        expect(player.getCurrentCue()).toBeNull();
+        const sources = getCreatedSources();
+        if (sources.length > 0) {
+          expect(sources[0]!.startSpy).not.toHaveBeenCalled();
+        }
+
+        console.log(
+          '[PASS] Silence-first decode failure correctly rejected and maintained silent state.',
+        );
+      } finally {
+        await player.dispose();
+        await realCtx.close();
+      }
+    });
+
+    it('should transition active playback to silence and propagate errors on active-source decode failure', async () => {
       const { player, realCtx, getCreatedSources } = createSpiedPlayer();
       const validCue = createTestAudioCue({ id: 'cue-active-valid' });
       const corruptCue = createTestAudioCue({ id: 'cue-corrupt' });

@@ -32,29 +32,30 @@ cleanup() {
     kill "$TAURI_PID" 2>/dev/null || true
     wait "$TAURI_PID" 2>/dev/null || true
   fi
-  # Kill any remaining process listening on the webdriver port
-  lsof -ti :"$WEBDRIVER_PORT" 2>/dev/null | xargs kill 2>/dev/null || true
 }
 
 trap cleanup EXIT INT TERM
 
-# Ensure clean slate
-lsof -ti :"$WEBDRIVER_PORT" 2>/dev/null | xargs kill 2>/dev/null || true
+# Ensure port 4445 is available before proceeding
+if lsof -ti :"$WEBDRIVER_PORT" >/dev/null 2>&1; then
+  echo "ERROR: Port ${WEBDRIVER_PORT} is already in use. Please free port ${WEBDRIVER_PORT} before running the validation harness."
+  exit 1
+fi
 
 # 1. Build the Tauri app statically with webdriver enabled (no dev server needed)
 echo "Building static frontend and compiling macOS app with webdriver feature..."
 if [ ! -d "${APP_PATH}" ]; then
   echo "App not found at target path. Performing clean build..."
   pnpm build
-  pnpm exec dotenv -e .env.tauri -- pnpm tauri build --debug --features webdriver --bundles app --no-sign
+  dotenv -e .env.tauri -- tauri build --debug --features webdriver --bundles app --no-sign
 else
   echo "Found existing debug app at ${APP_PATH}. Running compiler update checks..."
-  pnpm exec dotenv -e .env.tauri -- pnpm tauri build --debug --features webdriver --bundles app --no-sign
+  dotenv -e .env.tauri -- tauri build --debug --features webdriver --bundles app --no-sign
 fi
 
 # 2. Launch the compiled macOS app directly
 echo "Launching packaged app at ${BINARY_PATH}..."
-pnpm exec dotenv -e .env.tauri -- "${BINARY_PATH}" &
+dotenv -e .env.tauri -- "${BINARY_PATH}" &
 TAURI_PID=$!
 
 # 3. Wait for the embedded W3C WebDriver server to start
