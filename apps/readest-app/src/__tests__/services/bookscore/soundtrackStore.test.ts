@@ -510,7 +510,6 @@ describe('soundtrackStore issue #15 enhancements', () => {
         'ed-1-unique123',
       );
 
-    // Call play with customFs so loadSoundtrackAssetFile is invoked and rejects
     await useSoundtrackStore
       .getState()
       .play(true, {} as unknown as import('@/types/system').FileSystem);

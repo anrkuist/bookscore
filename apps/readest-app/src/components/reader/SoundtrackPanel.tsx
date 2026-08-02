@@ -250,7 +250,10 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
     return () => {
       clearTimeout(focusTimeout);
       window.removeEventListener('keydown', handleKeyDown);
+      // Restore focus to activator element only when the panel is actually closing
+      const stillOpen = useSoundtrackStore.getState().isPanelOpen;
       if (
+        !stillOpen &&
         previouslyFocusedElementRef.current &&
         typeof previouslyFocusedElementRef.current.focus === 'function'
       ) {
@@ -599,7 +602,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
           <button
             ref={closeBtnRef}
             type='button'
-            className='btn btn-ghost btn-xs btn-circle eink-bordered shrink-0 ms-2'
+            className='btn btn-ghost btn-xs btn-circle eink-bordered shrink-0 ms-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
             onClick={() => setPanelOpen(false)}
             aria-label={_('Close soundtrack panel')}
           >
@@ -608,13 +611,22 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
         </div>
 
         {/* Panel Body */}
-        <div className='flex-1 overflow-y-auto p-4 space-y-5'>
+        <div
+          tabIndex={0}
+          role='region'
+          aria-label={_('Soundtrack controls content')}
+          className='flex-1 overflow-y-auto p-4 space-y-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15 rounded-lg'
+        >
           {errorMsg && (
-            <div className='alert alert-error text-xs p-2.5 rounded-lg flex items-center justify-between'>
+            <div
+              role='alert'
+              aria-live='assertive'
+              className='alert alert-error text-xs p-2.5 rounded-lg flex items-center justify-between'
+            >
               <span>{errorMsg}</span>
               <button
                 type='button'
-                className='btn btn-ghost btn-xs'
+                className='btn btn-ghost btn-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                 onClick={() => setErrorMsg(null)}
                 aria-label={_('Dismiss soundtrack error')}
               >
@@ -629,28 +641,30 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
               <span className='text-xs font-semibold uppercase tracking-wider text-neutral-content/90'>
                 {_('Status')}
               </span>
-              {activeRepairItem ? (
-                <span className='badge badge-error gap-1 text-xs py-0.5 px-2 font-medium text-white'>
-                  <MdWarning className='h-3 w-3 me-0.5 inline' />
-                  {_('Silence (Repair Required)')}
-                </span>
-              ) : isPlaying ? (
-                <span className='badge badge-success gap-1 text-xs py-0.5 px-2 font-medium text-white'>
-                  {_('Playing')}
-                </span>
-              ) : isGestureRequired ? (
-                <span className='badge badge-warning text-xs py-0.5 px-2 font-medium'>
-                  {_('Click Play')}
-                </span>
-              ) : isSilence ? (
-                <span className='badge badge-neutral text-xs py-0.5 px-2 font-medium'>
-                  {_('Armed Quiet State')}
-                </span>
-              ) : (
-                <span className='badge badge-warning text-xs py-0.5 px-2 font-medium'>
-                  {_('Paused')}
-                </span>
-              )}
+              <div role='status' aria-live='polite'>
+                {activeRepairItem ? (
+                  <span className='badge badge-error gap-1 text-xs py-0.5 px-2 font-medium text-white'>
+                    <MdWarning className='h-3 w-3 me-0.5 inline' />
+                    {_('Silence (Repair Required)')}
+                  </span>
+                ) : isPlaying ? (
+                  <span className='badge badge-success gap-1 text-xs py-0.5 px-2 font-medium text-white'>
+                    {_('Playing')}
+                  </span>
+                ) : isGestureRequired ? (
+                  <span className='badge badge-warning text-xs py-0.5 px-2 font-medium'>
+                    {_('Click Play')}
+                  </span>
+                ) : isSilence ? (
+                  <span className='badge badge-neutral text-xs py-0.5 px-2 font-medium'>
+                    {_('Armed Quiet State')}
+                  </span>
+                ) : (
+                  <span className='badge badge-warning text-xs py-0.5 px-2 font-medium'>
+                    {_('Paused')}
+                  </span>
+                )}
+              </div>
             </div>
 
             <div className='text-sm font-medium text-base-content/90 line-clamp-1'>{cueLabel}</div>
@@ -678,7 +692,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                   />
                   <button
                     type='button'
-                    className='btn btn-xs btn-contrast gap-1.5 font-semibold'
+                    className='btn btn-xs btn-contrast gap-1.5 font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                     onClick={() => repairFileInputRef.current?.click()}
                   >
                     <MdOutlineFileUpload className='h-3.5 w-3.5' />
@@ -694,6 +708,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                 type='button'
                 className={clsx(
                   'btn btn-contrast btn-md w-full gap-2 font-semibold eink-bordered',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15',
                   isPlaying ? 'btn-outline' : '',
                 )}
                 onClick={() => void togglePlayPause()}
@@ -729,7 +744,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
             <div className='flex items-center gap-3'>
               <button
                 type='button'
-                className='btn btn-ghost btn-xs p-1'
+                className='btn btn-ghost btn-xs p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                 onClick={handleToggleMute}
                 aria-label={volume === 0 ? _('Unmute volume') : _('Mute volume')}
               >
@@ -746,7 +761,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                 step='0.01'
                 value={volume}
                 onChange={(e) => setVolume(parseFloat(e.target.value))}
-                className='range range-xs range-primary flex-1'
+                className='range range-xs range-primary flex-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/45'
                 aria-label={_('Soundtrack volume slider')}
               />
             </div>
@@ -761,7 +776,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
               {activeAssociation && (
                 <button
                   type='button'
-                  className='btn btn-xs btn-ghost border border-base-300 text-xs eink-bordered'
+                  className='btn btn-xs btn-ghost border border-base-300 text-xs eink-bordered focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                   onClick={handleDetachActive}
                 >
                   {_('Detach')}
@@ -778,7 +793,12 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                 {_('No soundtrack packages attached to this edition.')}
               </p>
             ) : (
-              <div className='space-y-2 max-h-56 overflow-y-auto pe-1'>
+              <div
+                tabIndex={0}
+                role='region'
+                aria-label={_('Attached Soundtrack Packages List')}
+                className='space-y-2 max-h-56 overflow-y-auto pe-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15 rounded-lg'
+              >
                 {candidates.map((cand) => (
                   <div
                     key={`${cand.package.packageId}:${cand.package.manifestHash}`}
@@ -796,25 +816,27 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                           <span className='font-semibold line-clamp-1'>
                             {cand.package.manifest.title}
                           </span>
-                          {cand.trustState === 'verified' ? (
-                            <span
-                              className='badge badge-xs badge-success text-white shrink-0'
-                              title={_('EPUB edition fingerprint match verified.')}
-                            >
-                              <MdCheckCircle className='h-2.5 w-2.5 me-0.5 inline' />
-                              {_('Verified')}
-                            </span>
-                          ) : (
-                            <span
-                              className='badge badge-xs badge-warning shrink-0'
-                              title={_(
-                                'EPUB edition fingerprint mismatch. Consent required for local association.',
-                              )}
-                            >
-                              <MdWarning className='h-2.5 w-2.5 me-0.5 inline' />
-                              {_('Unverified')}
-                            </span>
-                          )}
+                          <div role='status' aria-live='polite' className='inline-flex'>
+                            {cand.trustState === 'verified' ? (
+                              <span
+                                className='badge badge-xs badge-success text-white shrink-0'
+                                title={_('EPUB edition fingerprint match verified.')}
+                              >
+                                <MdCheckCircle className='h-2.5 w-2.5 me-0.5 inline' />
+                                {_('Verified')}
+                              </span>
+                            ) : (
+                              <span
+                                className='badge badge-xs badge-warning shrink-0'
+                                title={_(
+                                  'EPUB edition fingerprint mismatch. Consent required for local association.',
+                                )}
+                              >
+                                <MdWarning className='h-2.5 w-2.5 me-0.5 inline' />
+                                {_('Unverified')}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <p className='text-[11px] text-neutral-content'>
                           v{cand.package.manifest.version}
@@ -823,14 +845,18 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
 
                       <div className='shrink-0'>
                         {cand.isSelected ? (
-                          <span className='text-xs font-semibold text-primary px-2 py-0.5 bg-primary/10 rounded'>
+                          <span
+                            role='status'
+                            aria-live='polite'
+                            className='text-xs font-semibold text-primary px-2 py-0.5 bg-primary/10 rounded'
+                          >
                             {_('Active')}
                           </span>
                         ) : (
                           <button
                             type='button'
                             className={clsx(
-                              'btn btn-xs',
+                              'btn btn-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15',
                               cand.trustState === 'verified'
                                 ? 'btn-contrast'
                                 : 'btn-outline btn-warning',
@@ -838,8 +864,12 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                             onClick={() => handleSelectCandidate(cand)}
                             aria-label={
                               cand.trustState === 'verified'
-                                ? _('Attach verified package')
-                                : _('Attach unverified package')
+                                ? _("Attach verified package '{title}'", {
+                                    title: cand.package.manifest.title,
+                                  })
+                                : _("Attach unverified package '{title}' (consent required)", {
+                                    title: cand.package.manifest.title,
+                                  })
                             }
                           >
                             {cand.trustState === 'verified' ? _('Switch') : _('Switch (Consent)')}
@@ -853,9 +883,11 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                       <button
                         type='button'
                         id={`make-editable-copy-${cand.package.packageId}`}
-                        className='btn btn-xs btn-ghost border border-base-300 w-full eink-bordered gap-1'
+                        className='btn btn-xs btn-ghost border border-base-300 w-full eink-bordered gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                         onClick={() => handleMakeEditableCopy(cand.package)}
-                        aria-label={_('Make an editable copy of this soundtrack')}
+                        aria-label={_("Make an editable copy of '{title}'", {
+                          title: cand.package.manifest.title,
+                        })}
                       >
                         <MdEdit className='h-3.5 w-3.5' />
                         {_('Make Editable Copy')}
@@ -877,7 +909,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                 <button
                   type='button'
                   id='exit-authoring-mode'
-                  className='btn btn-xs btn-ghost eink-bordered'
+                  className='btn btn-xs btn-ghost eink-bordered focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                   onClick={exitAuthoringMode}
                   aria-label={_('Exit authoring mode')}
                 >
@@ -890,7 +922,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                 {_('Soundtrack name')}
                 <input
                   id='authoring-title-input'
-                  className='mt-1 w-full rounded border border-base-300 bg-base-100 px-2 py-1.5 text-sm font-normal eink-bordered'
+                  className='mt-1 w-full rounded border border-base-300 bg-base-100 px-2 py-1.5 text-sm font-normal eink-bordered focus:outline-none focus:ring-2 focus:ring-primary/40'
                   value={authoringTitle}
                   onChange={(e) => setAuthoringTitle(e.target.value)}
                   onBlur={handleAuthoringTitleBlur}
@@ -912,7 +944,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                   <button
                     type='button'
                     id='upload-mp3-asset'
-                    className='btn btn-xs btn-ghost border border-base-300 eink-bordered gap-1'
+                    className='btn btn-xs btn-ghost border border-base-300 eink-bordered gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                     onClick={() => assetFileInputRef.current?.click()}
                     aria-label={_('Upload MP3 asset')}
                   >
@@ -920,7 +952,12 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                   </button>
                 </div>
 
-                <div className='space-y-1 max-h-32 overflow-y-auto pe-1'>
+                <div
+                  tabIndex={0}
+                  role='region'
+                  aria-label={_('MP3 Assets List')}
+                  className='space-y-1 max-h-32 overflow-y-auto pe-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15 rounded-lg'
+                >
                   {editableCopy.manifest.assets.length === 0 && (
                     <p className='text-xs text-neutral-content italic py-0.5'>
                       {_('No MP3 assets added yet.')}
@@ -940,9 +977,9 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                       <button
                         type='button'
                         id={`remove-asset-${asset.id}`}
-                        className='btn btn-xs btn-ghost p-0.5 text-error shrink-0'
+                        className='btn btn-xs btn-ghost p-0.5 text-error shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                         onClick={() => handleRemoveAsset(asset.id)}
-                        aria-label={_('Remove asset')}
+                        aria-label={_("Remove asset '{id}'", { id: asset.id })}
                       >
                         <MdDelete className='h-3.5 w-3.5' />
                       </button>
@@ -959,7 +996,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                     <button
                       type='button'
                       id='add-audio-cue-at-position'
-                      className='btn btn-xs btn-ghost border border-base-300 eink-bordered gap-1'
+                      className='btn btn-xs btn-ghost border border-base-300 eink-bordered gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                       onClick={handleAddAudioCueHere}
                       aria-label={_('Add Audio cue at current reading position')}
                     >
@@ -968,7 +1005,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                     <button
                       type='button'
                       id='add-silence-cue-at-position'
-                      className='btn btn-xs btn-ghost border border-base-300 eink-bordered gap-1'
+                      className='btn btn-xs btn-ghost border border-base-300 eink-bordered gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                       onClick={handleAddSilenceCueHere}
                       aria-label={_('Add Silence cue at current reading position')}
                     >
@@ -977,7 +1014,12 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                   </div>
                 </div>
 
-                <div className='space-y-1.5 max-h-40 overflow-y-auto'>
+                <div
+                  tabIndex={0}
+                  role='region'
+                  aria-label={_('Soundtrack Cues List')}
+                  className='space-y-1.5 max-h-40 overflow-y-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15 rounded-lg'
+                >
                   {editableCopy.manifest.cues.length === 0 && (
                     <p className='text-xs text-neutral-content italic py-1'>
                       {_('No cues yet. Add one at the current position.')}
@@ -1007,14 +1049,14 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                           <button
                             type='button'
                             id={`preview-cue-${cue.id}`}
-                            className='btn btn-xs btn-ghost p-0.5'
+                            className='btn btn-xs btn-ghost p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                             onClick={() =>
                               isPreviewingCue ? stopCuePreview() : void startCuePreview(cue)
                             }
                             aria-label={
                               isPreviewingCue && editingCue?.id === cue.id
-                                ? _('Stop preview')
-                                : _('Preview cue')
+                                ? _('Stop preview of cue {id}', { id: cue.id })
+                                : _('Preview cue {id}', { id: cue.id })
                             }
                           >
                             {isPreviewingCue && editingCue?.id === cue.id ? (
@@ -1027,43 +1069,43 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                         <button
                           type='button'
                           id={`move-up-cue-${cue.id}`}
-                          className='btn btn-xs btn-ghost p-0.5'
+                          className='btn btn-xs btn-ghost p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                           onClick={() => handleReorderCue(cue.id, 'up')}
                           disabled={
                             editableCopy.manifest.cues.findIndex((c) => c.id === cue.id) === 0
                           }
-                          aria-label={_('Move cue up')}
+                          aria-label={_('Move cue {id} up', { id: cue.id })}
                         >
                           <MdArrowUpward className='h-3.5 w-3.5' />
                         </button>
                         <button
                           type='button'
                           id={`move-down-cue-${cue.id}`}
-                          className='btn btn-xs btn-ghost p-0.5'
+                          className='btn btn-xs btn-ghost p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                           onClick={() => handleReorderCue(cue.id, 'down')}
                           disabled={
                             editableCopy.manifest.cues.findIndex((c) => c.id === cue.id) ===
                             editableCopy.manifest.cues.length - 1
                           }
-                          aria-label={_('Move cue down')}
+                          aria-label={_('Move cue {id} down', { id: cue.id })}
                         >
                           <MdArrowDownward className='h-3.5 w-3.5' />
                         </button>
                         <button
                           type='button'
                           id={`edit-cue-${cue.id}`}
-                          className='btn btn-xs btn-ghost p-0.5'
+                          className='btn btn-xs btn-ghost p-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                           onClick={() => setEditingCue(editingCue?.id === cue.id ? null : cue)}
-                          aria-label={_('Edit cue')}
+                          aria-label={_('Edit cue {id}', { id: cue.id })}
                         >
                           <MdEdit className='h-3.5 w-3.5' />
                         </button>
                         <button
                           type='button'
                           id={`remove-cue-${cue.id}`}
-                          className='btn btn-xs btn-ghost p-0.5 text-error'
+                          className='btn btn-xs btn-ghost p-0.5 text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                           onClick={() => handleRemoveCue(cue.id)}
-                          aria-label={_('Remove cue')}
+                          aria-label={_('Remove cue {id}', { id: cue.id })}
                         >
                           <MdDelete className='h-3.5 w-3.5' />
                         </button>
@@ -1086,7 +1128,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
 
               {/* Validation issues */}
               {validationIssues.length > 0 && (
-                <div className='space-y-1'>
+                <div role='status' aria-live='polite' className='space-y-1'>
                   {validationIssues.map((issue, idx) => (
                     <div
                       key={idx}
@@ -1104,7 +1146,13 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
               )}
 
               {exportError && (
-                <p className='text-xs text-error rounded bg-error/10 px-2 py-1'>{exportError}</p>
+                <p
+                  role='alert'
+                  aria-live='assertive'
+                  className='text-xs text-error rounded bg-error/10 px-2 py-1'
+                >
+                  {exportError}
+                </p>
               )}
 
               {/* Validate + Export actions */}
@@ -1112,7 +1160,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                 <button
                   type='button'
                   id='validate-editable-copy'
-                  className='btn btn-xs btn-ghost border border-base-300 eink-bordered'
+                  className='btn btn-xs btn-ghost border border-base-300 eink-bordered focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                   onClick={handleValidate}
                 >
                   {_('Validate')}
@@ -1120,7 +1168,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                 <button
                   type='button'
                   id='export-editable-copy'
-                  className='btn btn-xs btn-contrast gap-1'
+                  className='btn btn-xs btn-contrast gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                   onClick={() => void handleExport()}
                   disabled={isExporting}
                   aria-label={_('Export editable copy as .bookscore file')}
@@ -1171,14 +1219,14 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
             <div className='flex justify-end gap-2 pt-2'>
               <button
                 type='button'
-                className='btn btn-sm btn-ghost eink-bordered'
+                className='btn btn-sm btn-ghost eink-bordered focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                 onClick={() => setConsentTarget(null)}
               >
                 {_('Cancel')}
               </button>
               <button
                 type='button'
-                className='btn btn-sm btn-contrast'
+                className='btn btn-sm btn-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                 onClick={handleConfirmUnverifiedConsent}
               >
                 {_('Attach as Unverified')}
@@ -1260,7 +1308,7 @@ const CueEditor: React.FC<CueEditorProps> = ({ cue, assets, onSave, onCancel, _ 
             id={`cue-type-${cue.id}`}
             value={cueType}
             onChange={(e) => setCueType(e.target.value as 'audio' | 'silence')}
-            className='select select-xs border border-base-300 bg-base-100 eink-bordered'
+            className='select select-xs border border-base-300 bg-base-100 eink-bordered focus:outline-none focus:ring-2 focus:ring-primary/40'
           >
             <option value='audio'>{_('Audio')}</option>
             <option value='silence'>{_('Silence')}</option>
@@ -1281,7 +1329,7 @@ const CueEditor: React.FC<CueEditorProps> = ({ cue, assets, onSave, onCancel, _ 
                 const a = assets.find((x) => x.id === nextAssetId);
                 if (a) setLoopEndSec(String(a.durationSec));
               }}
-              className='select select-xs border border-base-300 bg-base-100 flex-1 max-w-[160px] eink-bordered'
+              className='select select-xs border border-base-300 bg-base-100 flex-1 max-w-[160px] eink-bordered focus:outline-none focus:ring-2 focus:ring-primary/40'
             >
               {assets.length === 0 && <option value='asset-1'>asset-1</option>}
               {assets.map((a) => (
@@ -1323,13 +1371,13 @@ const CueEditor: React.FC<CueEditorProps> = ({ cue, assets, onSave, onCancel, _ 
               id: `cue-crossfade-${cue.id}`,
             },
           ].map(({ label, value, setter, id }) => (
-            <label key={id} className='flex items-center justify-between gap-2'>
+            <label key={id} htmlFor={id} className='flex items-center justify-between gap-2'>
               <span className='text-neutral-content shrink-0'>{label}</span>
               <input
                 id={id}
                 type='number'
                 step='0.01'
-                className='input input-xs border border-base-300 bg-base-100 w-20 text-right eink-bordered'
+                className='input input-xs border border-base-300 bg-base-100 w-20 text-end eink-bordered focus:outline-none focus:ring-2 focus:ring-primary/40'
                 value={value}
                 onChange={(e) => setter(e.target.value)}
               />
@@ -1345,13 +1393,17 @@ const CueEditor: React.FC<CueEditorProps> = ({ cue, assets, onSave, onCancel, _ 
       )}
 
       <div className='flex gap-2 justify-end pt-1'>
-        <button type='button' className='btn btn-xs btn-ghost eink-bordered' onClick={onCancel}>
+        <button
+          type='button'
+          className='btn btn-xs btn-ghost eink-bordered focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
+          onClick={onCancel}
+        >
           {_('Cancel')}
         </button>
         <button
           type='button'
           id={`save-cue-${cue.id}`}
-          className='btn btn-xs btn-contrast'
+          className='btn btn-xs btn-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
           onClick={handleSave}
         >
           {_('Save')}

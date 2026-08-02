@@ -100,6 +100,8 @@ describe('BookDetailSoundtrack Component', () => {
         trustState: 'verified',
       },
     });
+
+    vi.spyOn(persistenceModule, 'loadRepairQueue').mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -114,11 +116,8 @@ describe('BookDetailSoundtrack Component', () => {
   });
 
   it('renders active soundtrack details and verified badge on desktop', async () => {
-    const { getAllByText, getByText, findByText } = render(
-      <BookDetailSoundtrack book={makeBook()} />,
-    );
-    expect(await findByText('Soundtrack')).toBeTruthy();
-    expect(getAllByText('Verified Soundtrack Package').length).toBeGreaterThan(0);
+    const { getByText, findAllByText } = render(<BookDetailSoundtrack book={makeBook()} />);
+    expect((await findAllByText('Verified Soundtrack Package')).length).toBeGreaterThan(0);
     expect(getByText('Verified Association')).toBeTruthy();
   });
 
@@ -127,21 +126,18 @@ describe('BookDetailSoundtrack Component', () => {
       .spyOn(importServiceModule, 'detachSoundtrackFromEdition')
       .mockResolvedValue({ success: true });
 
-    const { findByText, getByText } = render(<BookDetailSoundtrack book={makeBook()} />);
-    await findByText('Soundtrack');
-
-    const detachBtn = getByText('Detach');
+    const { findByText } = render(<BookDetailSoundtrack book={makeBook()} />);
+    const detachBtn = await findByText('Detach');
     fireEvent.click(detachBtn);
 
     expect(detachSpy).toHaveBeenCalledWith(expect.anything(), 'Data', 'test-edition-123');
   });
 
   it('opens safe removal confirmation dialog when Remove Package is clicked', async () => {
-    const { findByText, getAllByText, getByText } = render(
+    const { findAllByText, getAllByText, getByText } = render(
       <BookDetailSoundtrack book={makeBook()} />,
     );
-    await findByText('Soundtrack');
-
+    await findAllByText('Verified Soundtrack Package');
     const removeBtn = getAllByText('Remove Package')[0]!;
     fireEvent.click(removeBtn);
 
@@ -196,5 +192,61 @@ describe('BookDetailSoundtrack Component', () => {
       expect(removeSpy).toHaveBeenCalledWith(expect.anything(), 'Data', 'pkg-2', 'hash2');
       expect(associateSpy).not.toHaveBeenCalled();
     });
+  });
+
+  it('asserts role=status live regions for active and candidate package verification and role=alert for errors', async () => {
+    const book = makeBook();
+    const { findByRole, getByRole, getByText } = render(<BookDetailSoundtrack book={book} />);
+
+    // Expand accordion (is expanded by default)
+    await findByRole('button', { name: /Soundtrack/ });
+
+    // Assert active status badge has role="status" and aria-live="polite"
+    await waitFor(() => {
+      const activeBadge = getByText('Verified Association');
+      const liveRegion = activeBadge.parentElement;
+      expect(liveRegion?.getAttribute('role')).toBe('status');
+      expect(liveRegion?.getAttribute('aria-live')).toBe('polite');
+    });
+
+    // Simulate an error messaging state by making import fail
+    vi.spyOn(importServiceModule, 'importAndAssociateBookScorePackage').mockRejectedValue(
+      new Error('Import failed test error'),
+    );
+
+    // Trigger import file change
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+    if (fileInput) {
+      fireEvent.change(fileInput, {
+        target: { files: [new File([''], 'test.bookscore', { type: 'application/octet-stream' })] },
+      });
+    }
+
+    await waitFor(() => {
+      const errorAlert = getByRole('alert');
+      expect(errorAlert.textContent).toContain('Import failed test error');
+      expect(errorAlert.getAttribute('aria-live')).toBe('assertive');
+    });
+  });
+
+  it('verifies RTL logical property, e-ink borders, and visible focus rings', async () => {
+    vi.spyOn(persistenceModule, 'loadLocalAssociations').mockResolvedValue({});
+    vi.spyOn(persistenceModule, 'loadRepairQueue').mockResolvedValue({});
+
+    const book = makeBook();
+    const { findByRole } = render(<BookDetailSoundtrack book={book} />);
+
+    const headerBtn = await findByRole('button', { name: /Soundtrack/ });
+
+    // RTL: should use logical start property text-start instead of text-left
+    expect(headerBtn.className).toContain('text-start');
+    expect(headerBtn.className).not.toContain('text-left');
+
+    // Focus indicators: should have focus-visible styling
+    expect(headerBtn.className).toContain('focus-visible:ring-base-content/15');
+
+    // Eink: list or elements should have eink-bordered classes (is expanded by default)
+    const importBtn = await findByRole('button', { name: /Import Soundtrack/i });
+    expect(importBtn.className).toContain('focus-visible:ring-base-content/15');
   });
 });

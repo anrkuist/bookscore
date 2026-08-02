@@ -251,10 +251,12 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
     <div className='metadata-soundtrack text-base-content my-2'>
       <button
         className={clsx(
-          'flex w-full items-center justify-between px-4 py-3 text-left transition-colors',
+          'flex w-full items-center justify-between px-4 py-3 text-start transition-colors',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15',
           isCollapsed ? 'hover:bg-base-200 rounded-lg' : '',
         )}
         onClick={() => setIsCollapsed(!isCollapsed)}
+        aria-expanded={!isCollapsed}
       >
         <span className='text-neutral-content/85 text-base font-semibold'>{_('Soundtrack')}</span>
         <div className='transition-transform duration-200'>
@@ -269,9 +271,17 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
       {!isCollapsed && (
         <div className='px-4 py-2 space-y-3'>
           {errorMsg && (
-            <div className='alert alert-error text-xs p-2 rounded-lg flex items-center justify-between'>
+            <div
+              role='alert'
+              aria-live='assertive'
+              className='alert alert-error text-xs p-2 rounded-lg flex items-center justify-between'
+            >
               <span>{errorMsg}</span>
-              <button className='btn btn-ghost btn-xs' onClick={() => setErrorMsg(null)}>
+              <button
+                className='btn btn-ghost btn-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
+                onClick={() => setErrorMsg(null)}
+                aria-label={_('Dismiss error')}
+              >
                 ✕
               </button>
             </div>
@@ -298,39 +308,45 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
                             {_('Version')} {activePackage.manifest.version}
                           </p>
                         </div>
-                        {activeRepairItem ? (
-                          <span
-                            className='badge badge-error gap-1 text-xs py-1 px-2 font-medium text-white'
-                            title={_('Package failure: {reason}', {
-                              reason: activeRepairItem.reason,
-                            })}
-                          >
-                            <MdWarning className='h-3 w-3' />
-                            {_('Repair Required ({reason})', { reason: activeRepairItem.reason })}
-                          </span>
-                        ) : activeAssociation.trustState === 'unverified' ? (
-                          <span
-                            className='badge badge-warning gap-1 text-xs py-1 px-2 font-medium'
-                            title={_(
-                              'EPUB edition fingerprint mismatch. Consent granted for local association.',
-                            )}
-                          >
-                            <MdWarning className='h-3 w-3' />
-                            {_('Unverified Association')}
-                          </span>
-                        ) : (
-                          <span
-                            className='badge badge-success gap-1 text-xs py-1 px-2 font-medium text-white'
-                            title={_('EPUB edition fingerprint match verified.')}
-                          >
-                            <MdCheckCircle className='h-3 w-3' />
-                            {_('Verified Association')}
-                          </span>
-                        )}
+                        <div role='status' aria-live='polite'>
+                          {activeRepairItem ? (
+                            <span
+                              className='badge badge-error gap-1 text-xs py-1 px-2 font-medium text-white'
+                              title={_('Package failure: {reason}', {
+                                reason: activeRepairItem.reason,
+                              })}
+                            >
+                              <MdWarning className='h-3 w-3' />
+                              {_('Repair Required ({reason})', { reason: activeRepairItem.reason })}
+                            </span>
+                          ) : activeAssociation.trustState === 'unverified' ? (
+                            <span
+                              className='badge badge-warning gap-1 text-xs py-1 px-2 font-medium'
+                              title={_(
+                                'EPUB edition fingerprint mismatch. Consent granted for local association.',
+                              )}
+                            >
+                              <MdWarning className='h-3 w-3' />
+                              {_('Unverified Association')}
+                            </span>
+                          ) : (
+                            <span
+                              className='badge badge-success gap-1 text-xs py-1 px-2 font-medium text-white'
+                              title={_('EPUB edition fingerprint match verified.')}
+                            >
+                              <MdCheckCircle className='h-3 w-3' />
+                              {_('Verified Association')}
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {activeRepairItem && (
-                        <p className='text-xs text-warning leading-relaxed font-medium'>
+                        <p
+                          role='alert'
+                          aria-live='assertive'
+                          className='text-xs text-warning leading-relaxed font-medium'
+                        >
                           {_(
                             'Audio files are missing, unreadable, or corrupted. Re-import the package to repair.',
                           )}
@@ -340,7 +356,7 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
                       <div className='flex items-center gap-2 pt-1 flex-wrap'>
                         {activeRepairItem && (
                           <button
-                            className='btn btn-xs btn-contrast gap-1'
+                            className='btn btn-xs btn-contrast gap-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                             onClick={() => fileInputRef.current?.click()}
                           >
                             <MdOutlineFileUpload className='h-3.5 w-3.5' />
@@ -348,13 +364,13 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
                           </button>
                         )}
                         <button
-                          className='btn btn-xs btn-ghost border border-base-300'
+                          className='btn btn-xs btn-ghost border border-base-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                           onClick={handleDetachActive}
                         >
                           {_('Detach')}
                         </button>
                         <button
-                          className='btn btn-xs btn-outline btn-error'
+                          className='btn btn-xs btn-outline btn-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                           onClick={() => setRemovalTarget(activePackage)}
                         >
                           {_('Remove Package')}
@@ -375,7 +391,12 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
                   <p className='text-xs font-bold text-neutral-content/90 uppercase tracking-wider'>
                     {_('Installed Soundtrack Packages')}
                   </p>
-                  <div className='space-y-2 max-h-48 overflow-y-auto pe-1'>
+                  <div
+                    tabIndex={0}
+                    role='region'
+                    aria-label={_('Installed Soundtrack Packages List')}
+                    className='space-y-2 max-h-48 overflow-y-auto pe-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15 rounded-lg'
+                  >
                     {candidates.map((cand) => {
                       const candRepairItem =
                         repairQueue[`${cand.package.packageId}:${cand.package.manifestHash}`] ??
@@ -396,38 +417,52 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
                               <span className='font-semibold line-clamp-1'>
                                 {cand.package.manifest.title}
                               </span>
-                              {candRepairItem ? (
-                                <span className='badge badge-xs badge-error text-white me-1'>
-                                  {_('Repair Required')}
-                                </span>
-                              ) : cand.trustState === 'verified' ? (
-                                <span className='badge badge-xs badge-success text-white'>
-                                  {_('Verified')}
-                                </span>
-                              ) : (
-                                <span className='badge badge-xs badge-warning'>
-                                  {_('Unverified')}
-                                </span>
-                              )}
+                              <div role='status' aria-live='polite' className='inline-flex'>
+                                {candRepairItem ? (
+                                  <span className='badge badge-xs badge-error text-white me-1'>
+                                    {_('Repair Required')}
+                                  </span>
+                                ) : cand.trustState === 'verified' ? (
+                                  <span className='badge badge-xs badge-success text-white'>
+                                    {_('Verified')}
+                                  </span>
+                                ) : (
+                                  <span className='badge badge-xs badge-warning'>
+                                    {_('Unverified')}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                             <p className='text-xs text-neutral-content'>
                               v{cand.package.manifest.version}
                             </p>
                           </div>
                           <div className='flex items-center gap-2 flex-wrap justify-end'>
-                            {cand.isSelected ? (
-                              <span className='text-xs font-semibold text-primary px-2 py-1 bg-primary/10 rounded'>
-                                {_('Active')}
-                              </span>
-                            ) : (
+                            <div role='status' aria-live='polite'>
+                              {cand.isSelected && (
+                                <span className='text-xs font-semibold text-primary px-2 py-1 bg-primary/10 rounded'>
+                                  {_('Active')}
+                                </span>
+                              )}
+                            </div>
+                            {!cand.isSelected && (
                               <button
                                 className={clsx(
-                                  'btn btn-xs',
+                                  'btn btn-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15',
                                   cand.trustState === 'verified'
                                     ? 'btn-contrast'
                                     : 'btn-outline btn-warning',
                                 )}
                                 onClick={() => handleSelectPackage(cand)}
+                                aria-label={
+                                  cand.trustState === 'verified'
+                                    ? _("Attach verified package '{title}'", {
+                                        title: cand.package.manifest.title,
+                                      })
+                                    : _("Attach unverified package '{title}' (consent required)", {
+                                        title: cand.package.manifest.title,
+                                      })
+                                }
                               >
                                 {cand.trustState === 'verified'
                                   ? _('Attach')
@@ -435,8 +470,11 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
                               </button>
                             )}
                             <button
-                              className='btn btn-xs btn-outline btn-error'
+                              className='btn btn-xs btn-outline btn-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                               onClick={() => setRemovalTarget(cand.package)}
+                              aria-label={_("Remove package '{title}'", {
+                                title: cand.package.manifest.title,
+                              })}
                             >
                               {_('Remove Package')}
                             </button>
@@ -458,7 +496,7 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
                   onChange={handleImportFileChange}
                 />
                 <button
-                  className='btn btn-sm btn-contrast gap-2'
+                  className='btn btn-sm btn-contrast gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
                   disabled={importing}
                   onClick={() => fileInputRef.current?.click()}
                 >
@@ -502,10 +540,16 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
             </p>
 
             <div className='flex justify-end gap-2 pt-2'>
-              <button className='btn btn-sm btn-ghost' onClick={() => setConsentTarget(null)}>
+              <button
+                className='btn btn-sm btn-ghost focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
+                onClick={() => setConsentTarget(null)}
+              >
                 {_('Cancel')}
               </button>
-              <button className='btn btn-sm btn-contrast' onClick={handleConfirmUnverifiedConsent}>
+              <button
+                className='btn btn-sm btn-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
+                onClick={handleConfirmUnverifiedConsent}
+              >
                 {_('Attach as Unverified')}
               </button>
             </div>
@@ -544,10 +588,16 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
             </p>
 
             <div className='flex justify-end gap-2 pt-2'>
-              <button className='btn btn-sm btn-ghost' onClick={() => setVerifiedTarget(null)}>
+              <button
+                className='btn btn-sm btn-ghost focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
+                onClick={() => setVerifiedTarget(null)}
+              >
                 {_('Skip')}
               </button>
-              <button className='btn btn-sm btn-contrast' onClick={handleConfirmVerifiedCandidate}>
+              <button
+                className='btn btn-sm btn-contrast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
+                onClick={handleConfirmVerifiedCandidate}
+              >
                 {_('Attach Soundtrack')}
               </button>
             </div>
@@ -601,10 +651,16 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
             </p>
 
             <div className='flex justify-end gap-2 pt-2'>
-              <button className='btn btn-sm btn-ghost' onClick={() => setRemovalTarget(null)}>
+              <button
+                className='btn btn-sm btn-ghost focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
+                onClick={() => setRemovalTarget(null)}
+              >
                 {_('Cancel')}
               </button>
-              <button className='btn btn-sm btn-error' onClick={handleConfirmRemoval}>
+              <button
+                className='btn btn-sm btn-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-base-content/15'
+                onClick={handleConfirmRemoval}
+              >
                 {_('Remove Package')}
               </button>
             </div>

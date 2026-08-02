@@ -4,7 +4,7 @@ vi.mock('@/services/tts/TTSController', () => ({
   DEFAULT_SENTENCE_GAP_SEC: 0.1,
   DEFAULT_PARAGRAPH_GAP_SEC: 0.5,
 }));
-import { render, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 
 import { SoundtrackControl } from '@/components/reader/SoundtrackControl';
 import { SoundtrackPanel } from '@/components/reader/SoundtrackPanel';
@@ -12,6 +12,7 @@ import { useSoundtrackStore } from '@/store/soundtrackStore';
 import * as capabilityModule from '@/services/bookscore/capability';
 import * as persistenceModule from '@/services/bookscore/persistence';
 import * as importServiceModule from '@/services/bookscore/importService';
+import * as authoringServiceModule from '@/services/bookscore/authoringService';
 import { InstalledPackage, LocalAssociation } from '@/services/bookscore/types';
 
 vi.mock('@/hooks/useTranslation', () => ({
@@ -338,7 +339,7 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     const { findByLabelText, getByLabelText } = render(<SoundtrackControl isMobile={false} />);
 
     // Click "Make Editable Copy"
-    const makeCopyBtn = await findByLabelText(/make an editable copy of this soundtrack/i);
+    const makeCopyBtn = await findByLabelText(/make an editable copy of/i);
     fireEvent.click(makeCopyBtn);
 
     await waitFor(() => {
@@ -386,7 +387,7 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     );
 
     // Enter authoring mode
-    const makeCopyBtn = await findByLabelText(/make an editable copy of this soundtrack/i);
+    const makeCopyBtn = await findByLabelText(/make an editable copy of/i);
     fireEvent.click(makeCopyBtn);
 
     await waitFor(() => {
@@ -434,7 +435,7 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
       <SoundtrackControl isMobile={false} />,
     );
 
-    const makeCopyBtn = await findByLabelText(/make an editable copy of this soundtrack/i);
+    const makeCopyBtn = await findByLabelText(/make an editable copy of/i);
     fireEvent.click(makeCopyBtn);
 
     await waitFor(() => {
@@ -454,7 +455,7 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     expect(copy.manifest.cues.length).toBeGreaterThanOrEqual(2);
 
     const targetCue = copy.manifest.cues[1]!;
-    const moveUpBtns = getAllByLabelText(/move cue up/i);
+    const moveUpBtns = getAllByLabelText(/move cue .* up/i);
     expect(moveUpBtns.length).toBeGreaterThanOrEqual(2);
     fireEvent.click(moveUpBtns[1]!);
 
@@ -462,5 +463,234 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
       const reorderedCopy = useSoundtrackStore.getState().editableCopy!;
       expect(reorderedCopy.manifest.cues[0]!.id).toBe(targetCue.id);
     });
+  });
+
+  it('traps focus inside the unverified consent dialog for both Tab and Shift+Tab directions', async () => {
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'edition-123',
+        { 'pkg-verified-1:hash-1': samplePkg, 'pkg-unverified-2:hash-2': unverifiedPkg },
+        { 'edition-123': sampleAssoc },
+      );
+    useSoundtrackStore.getState().setPanelOpen(true);
+
+    const { findByRole, getByRole } = render(
+      <SoundtrackPanel editionId='edition-123' isMobile={false} />,
+    );
+
+    const switchConsentBtn = await findByRole('button', { name: /attach unverified package/i });
+    fireEvent.click(switchConsentBtn);
+
+    // Consent modal pops up - retrieve the dialog element
+    const dialog = getByRole('dialog', { name: /attach unverified soundtrack/i });
+    expect(dialog).toBeDefined();
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+
+    // Assert that the dialog close button uses the logical class ms-auto instead of ml-auto
+    const closeBtns = within(dialog).getAllByRole('button', { name: /close/i });
+    const desktopCloseBtn = closeBtns.find((btn) => btn.className.includes('sm:flex'));
+    expect(desktopCloseBtn).toBeDefined();
+    expect(desktopCloseBtn!.className).toContain('ms-auto');
+    expect(desktopCloseBtn!.className).not.toContain('ml-auto');
+
+    // Query focusable elements inside the dialog
+    const focusableSelectors =
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+    const focusables = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelectors)).filter(
+      (el) => {
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+      },
+    );
+
+    expect(focusables.length).toBeGreaterThanOrEqual(2);
+
+    const firstEl = focusables[0]!;
+    const lastEl = focusables[focusables.length - 1]!;
+
+    // Focus last element and press Tab -> should focus first element
+    lastEl.focus();
+    expect(document.activeElement).toBe(lastEl);
+
+    // Dispatch Tab keydown event on the last element to trigger the Dialog's tab trap handler
+    const tabEvent = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    lastEl.dispatchEvent(tabEvent);
+
+    expect(document.activeElement).toBe(firstEl);
+
+    // Focus first element and press Shift+Tab -> should focus last element
+    firstEl.focus();
+    expect(document.activeElement).toBe(firstEl);
+
+    const shiftTabEvent = new KeyboardEvent('keydown', {
+      key: 'Tab',
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    firstEl.dispatchEvent(shiftTabEvent);
+
+    expect(document.activeElement).toBe(lastEl);
+  });
+
+  it('asserts the presence and updates of the polite status live regions in the panel', async () => {
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'edition-123',
+        { 'pkg-verified-1:hash-1': samplePkg },
+        { 'edition-123': sampleAssoc },
+      );
+    useSoundtrackStore.getState().setPanelOpen(true);
+
+    const { getByRole, rerender } = render(
+      <SoundtrackPanel editionId='edition-123' isMobile={false} />,
+    );
+
+    // Assert that status live region is present
+    const statusRegion = getByRole('status');
+    expect(statusRegion).toBeDefined();
+    expect(statusRegion.getAttribute('aria-live')).toBe('polite');
+
+    // Currently paused
+    expect(statusRegion.textContent).toContain('Paused');
+
+    // Simulate switching to playing
+    useSoundtrackStore.getState().playbackStatus = 'playing';
+    rerender(<SoundtrackPanel editionId='edition-123' isMobile={false} />);
+    expect(statusRegion.textContent).toContain('Playing');
+  });
+
+  it('asserts status live regions for validation issues and alert for export errors', async () => {
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'edition-123',
+        { 'pkg-verified-1:hash-1': samplePkg },
+        { 'edition-123': sampleAssoc },
+      );
+    useSoundtrackStore.getState().setPanelOpen(true);
+
+    const validateSpy = vi.spyOn(authoringServiceModule, 'validateEditableCopy').mockResolvedValue({
+      valid: false,
+      issues: [{ severity: 'error', message: 'Test validation issue' }],
+    });
+
+    const exportSpy = vi.spyOn(authoringServiceModule, 'exportEditableCopy').mockResolvedValue({
+      success: false,
+      error: 'Failed to export package',
+      issues: [{ severity: 'error', message: 'Test validation issue' }],
+    });
+
+    // Enter authoring mode by making editable copy
+    const { findByLabelText, getByRole, getByText } = render(
+      <SoundtrackPanel editionId='edition-123' isMobile={false} />,
+    );
+
+    const makeCopyBtn = await findByLabelText(/make an editable copy/i);
+    fireEvent.click(makeCopyBtn);
+
+    await waitFor(() => {
+      expect(useSoundtrackStore.getState().isAuthoringMode).toBe(true);
+    });
+
+    // Trigger validation
+    const validateBtn = getByRole('button', { name: /validate/i });
+    fireEvent.click(validateBtn);
+
+    await waitFor(() => {
+      expect(validateSpy).toHaveBeenCalled();
+      // Find the validation status region
+      const validationStatus = getByText('✕ Test validation issue').parentElement;
+      expect(validationStatus?.getAttribute('role')).toBe('status');
+      expect(validationStatus?.getAttribute('aria-live')).toBe('polite');
+    });
+
+    // Trigger export
+    const exportBtn = getByRole('button', { name: /export/i });
+    fireEvent.click(exportBtn);
+
+    await waitFor(() => {
+      expect(exportSpy).toHaveBeenCalled();
+      const exportAlert = getByRole('alert');
+      expect(exportAlert.textContent).toContain('Failed to export package');
+      expect(exportAlert.getAttribute('aria-live')).toBe('assertive');
+    });
+  });
+
+  it('updates the SoundtrackControl trigger aria-label dynamically based on playback status', async () => {
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'edition-123',
+        { 'pkg-verified-1:hash-1': samplePkg },
+        { 'edition-123': sampleAssoc },
+      );
+
+    const { getByRole, rerender } = render(<SoundtrackControl isMobile={false} />);
+
+    // Initially paused status
+    let controlBtn = getByRole('button', { name: /Soundtrack controls - Soundtrack Paused/i });
+    expect(controlBtn).toBeDefined();
+
+    // Change to playing status
+    useSoundtrackStore.getState().playbackStatus = 'playing';
+    rerender(<SoundtrackControl isMobile={false} />);
+
+    controlBtn = getByRole('button', { name: /Soundtrack controls - Soundtrack Playing/i });
+    expect(controlBtn).toBeDefined();
+
+    // Simulate gesture required state
+    useSoundtrackStore.getState().playbackStatus = 'gesture_required';
+    rerender(<SoundtrackControl isMobile={false} />);
+
+    controlBtn = getByRole('button', {
+      name: /Soundtrack controls - Click to enable Soundtrack Audio/i,
+    });
+    expect(controlBtn).toBeDefined();
+  });
+
+  it('verifies SoundtrackPanel RTL end alignment, e-ink borders, scroll region tabIndices, and focus classes', async () => {
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'edition-123',
+        { 'pkg-verified-1:hash-1': samplePkg },
+        { 'edition-123': sampleAssoc },
+      );
+    useSoundtrackStore.getState().setPanelOpen(true);
+
+    const { getByRole, getByLabelText, findByLabelText } = render(
+      <SoundtrackPanel editionId='edition-123' isMobile={false} />,
+    );
+
+    // Focus style check on close button
+    const closeBtn = getByRole('button', { name: /close soundtrack panel/i });
+    expect(closeBtn.className).toContain('focus-visible:ring-base-content/15');
+
+    // Scroll region check
+    const bodyRegion = getByRole('region', { name: /soundtrack controls content/i });
+    expect(bodyRegion.getAttribute('tabindex')).toBe('0');
+    expect(bodyRegion.className).toContain('focus-visible:ring-base-content/15');
+
+    // Go to authoring mode
+    const makeCopyBtn = await findByLabelText(/make an editable copy/i);
+    fireEvent.click(makeCopyBtn);
+
+    // Select the edit cue button to open CueEditor
+    const editBtn = await findByLabelText(/edit cue cue-1/i);
+    fireEvent.click(editBtn);
+
+    // RTL: verify that the input uses text-end (logical properties) rather than text-right
+    const startSecInput = getByLabelText(/^start \(s\)$/i);
+    expect(startSecInput.className).toContain('text-end');
+    expect(startSecInput.className).not.toContain('text-right');
+    expect(startSecInput.className).toContain('focus:ring-primary/40');
   });
 });
