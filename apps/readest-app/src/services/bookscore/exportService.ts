@@ -1,5 +1,6 @@
 import { BaseDir, FileSystem } from '@/types/system';
 import { loadSoundtrackAssetFile } from './assetStorage';
+import { sha256Hex } from './packageValidation';
 import { loadInstalledPackages } from './persistence';
 import { SoundtrackPackageManifest } from './types';
 
@@ -46,7 +47,8 @@ export async function exportBookScorePackage(
   const manifestJson = JSON.stringify(manifest);
   await zipWriter.add('manifest.json', new TextReader(manifestJson));
 
-  // Write each asset binary, namespaced by assetId so the import path finder matches
+  // Write each asset binary, verifying SHA-256 before writing.
+  // A nonempty-but-corrupt asset must not produce a silently unimportable archive.
   for (const asset of manifest.assets) {
     const audioData = await loadSoundtrackAssetFile(fs, baseDir, packageId, asset.id, manifestHash);
 
@@ -59,6 +61,15 @@ export async function exportBookScorePackage(
     }
 
     const assetBytes = new Uint8Array(audioData);
+    const computedHash = await sha256Hex(assetBytes);
+    if (computedHash.toLowerCase() !== asset.hash.toLowerCase()) {
+      await zipWriter.close();
+      return {
+        success: false,
+        error: `Asset ${asset.id} hash mismatch in storage for package ${pkgKey} (stored data is corrupt)`,
+      };
+    }
+
     // Use the path declared in the manifest so validateBookScorePackageArchive can locate it
     await zipWriter.add(asset.path, new Uint8ArrayReader(assetBytes));
   }
