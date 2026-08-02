@@ -1,9 +1,9 @@
-import {
+import type {
   InstalledPackage,
   SoundtrackAsset,
   SoundtrackCue,
   SoundtrackPackageManifest,
-} from './types';
+} from './types.ts';
 
 export type ValidationResult = {
   valid: boolean;

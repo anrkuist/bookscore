@@ -234,7 +234,8 @@ const FoliateViewer: React.FC<{
       detail.fraction,
     );
 
-    if (isTauriAppPlatform() && detail.cfi) {
+    const isSoundtrackEnabled = useSoundtrackStore.getState().capabilityEnabled;
+    if (isSoundtrackEnabled && detail.cfi) {
       soundtrackSeqRef.current += 1;
       useSoundtrackStore.getState().reportLocation({
         seq: soundtrackSeqRef.current,

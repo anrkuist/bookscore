@@ -1,4 +1,3 @@
-import { connect } from '@tursodatabase/database';
 import { avg, randomUnitVectorJson, type Bench, type BenchResult } from './lib.ts';
 
 /**
@@ -28,6 +27,7 @@ export default {
   description: 'Brute-force per-book kNN over vector32 embeddings filtered by book_hash.',
 
   async run(): Promise<BenchResult[]> {
+    const { connect } = await import('@tursodatabase/database');
     const db = await connect(':memory:', {});
     await db.exec(
       'CREATE TABLE c (id INTEGER PRIMARY KEY, book_hash TEXT NOT NULL, embedding BLOB)',
