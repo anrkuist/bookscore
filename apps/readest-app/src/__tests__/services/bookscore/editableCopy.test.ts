@@ -10,13 +10,20 @@
  *  6. Export descendant compatibility:  exported archive re-imports via the #17 pipeline
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+vi.mock('@/services/tts/TTSController', () => ({
+  TTSController: class {},
+  DEFAULT_SENTENCE_GAP_SEC: 0.1,
+  DEFAULT_PARAGRAPH_GAP_SEC: 0.5,
+}));
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { BaseDir, FileSystem } from '@/types/system';
 import {
   makeEditableCopy,
+  addAssetToCopy,
+  removeAssetFromCopy,
   addCueAtCfi,
   editCue,
   removeCue,
@@ -35,7 +42,8 @@ import {
 } from '@/services/bookscore/importService';
 import { loadInstalledPackages } from '@/services/bookscore/persistence';
 import { importAndAssociateBookScorePackage as reimport } from '@/services/bookscore/importService';
-import { AudioCue, EditableCopy, SilenceCue } from '@/services/bookscore/types';
+import { AudioCue, EditableCopy, SilenceCue, SoundtrackAsset } from '@/services/bookscore/types';
+import { useSoundtrackStore } from '@/store/soundtrackStore';
 
 import { createTestFileSystem } from './testHelpers';
 
@@ -633,5 +641,292 @@ describe('saveEditableCopy / loadEditableCopy – persistence', () => {
   it('returns null when the copyId is not in storage', async () => {
     const result = await loadEditableCopy(ctx.fs, BASE_DIR, 'nonexistent-copy-id');
     expect(result).toBeNull();
+  });
+});
+
+// ── 8. MP3 Asset CRUD & Reusable Asset Management ────────────────────────────
+
+describe('addAssetToCopy / removeAssetFromCopy – asset management', () => {
+  const mp3 = createMinimalValidMp3Bytes();
+
+  function baseCopy(): EditableCopy {
+    return {
+      copyId: 'copy-asset-crud',
+      sourcePackageId: 'src',
+      sourceManifestHash: 'src-hash',
+      editionId: 'ed-asset-crud',
+      manifest: {
+        packageId: 'copy-asset-crud',
+        title: 'Asset CRUD Test',
+        version: 1,
+        manifestHash: '',
+        editionCompatibility: [],
+        assets: [],
+        cues: [],
+      },
+      assetBytes: {},
+      createdAt: Date.now(),
+      modifiedAt: Date.now(),
+    };
+  }
+
+  it('adds an MP3 asset and stores its binary bytes in assetBytes', () => {
+    const copy = baseCopy();
+    const asset: SoundtrackAsset = {
+      id: 'asset-new-1',
+      path: 'audio/asset-new-1.mp3',
+      mimeType: 'audio/mpeg',
+      hash: 'hash123',
+      durationSec: 12.5,
+    };
+    const updated = addAssetToCopy(copy, asset, mp3);
+
+    expect(updated.manifest.assets).toHaveLength(1);
+    expect(updated.manifest.assets[0]!.id).toBe('asset-new-1');
+    expect(updated.assetBytes['asset-new-1']).toBeDefined();
+    expect(updated.assetBytes['asset-new-1']!.byteLength).toBe(mp3.byteLength);
+  });
+
+  it('removes an MP3 asset and purges its binary bytes from assetBytes', () => {
+    const copy = baseCopy();
+    const asset: SoundtrackAsset = {
+      id: 'asset-del-1',
+      path: 'audio/asset-del-1.mp3',
+      mimeType: 'audio/mpeg',
+      hash: 'hash123',
+      durationSec: 5,
+    };
+    let updated = addAssetToCopy(copy, asset, mp3);
+    expect(updated.manifest.assets).toHaveLength(1);
+
+    updated = removeAssetFromCopy(updated, 'asset-del-1');
+    expect(updated.manifest.assets).toHaveLength(0);
+    expect(updated.assetBytes['asset-del-1']).toBeUndefined();
+  });
+});
+
+// ── 9. Production location seam -> currentCfi tracking ───────────────────────
+
+describe('soundtrackStore – location seam currentCfi integration', () => {
+  beforeEach(() => {
+    useSoundtrackStore.getState().resetSoundtrack();
+  });
+
+  it('tracks currentCfi from reportLocation even when capability or activePackage is not set', () => {
+    expect(useSoundtrackStore.getState().currentCfi).toBeNull();
+
+    useSoundtrackStore.getState().reportLocation({
+      seq: 1,
+      kind: 'resolved',
+      cfi: 'epubcfi(/6/14!/4/2:10)',
+    });
+
+    expect(useSoundtrackStore.getState().currentCfi).toBe('epubcfi(/6/14!/4/2:10)');
+  });
+
+  it('anchors newly added cues to the reported currentCfi', () => {
+    useSoundtrackStore.getState().reportLocation({
+      seq: 1,
+      kind: 'resolved',
+      cfi: 'epubcfi(/6/20!/4/8:0)',
+    });
+
+    const currentCfi = useSoundtrackStore.getState().currentCfi!;
+    expect(currentCfi).toBe('epubcfi(/6/20!/4/8:0)');
+
+    const copy: EditableCopy = {
+      copyId: 'copy-cfi-test',
+      sourcePackageId: 'src',
+      sourceManifestHash: 'hash',
+      editionId: 'ed-cfi',
+      manifest: {
+        packageId: 'copy-cfi-test',
+        title: 'CFI Test',
+        version: 1,
+        manifestHash: '',
+        editionCompatibility: [],
+        assets: [],
+        cues: [],
+      },
+      assetBytes: {},
+      createdAt: Date.now(),
+      modifiedAt: Date.now(),
+    };
+
+    const newCue: SilenceCue = { id: 'cue-loc', startCfi: currentCfi, type: 'silence' };
+    const updated = addCueAtCfi(copy, newCue);
+    expect(updated.manifest.cues[0]!.startCfi).toBe('epubcfi(/6/20!/4/8:0)');
+  });
+});
+
+// ── 10. Store / Player Preview Completion & Stop ──────────────────────────────
+
+describe('soundtrackStore – cue preview completion & stop lifecycle', () => {
+  const mp3 = createMinimalValidMp3Bytes();
+
+  class FakePlayer {
+    isUnlocked = () => true;
+    unlockGesture = async () => true;
+    playCue = async () => {};
+    transitionToSilence = async () => {};
+    pause = () => {};
+    stop = () => {};
+    dispose = async () => {};
+    getCurrentCue = () => null;
+    getSavedOffset = () => undefined;
+    setVolume = () => {};
+    getVolume = () => 1.0;
+  }
+
+  beforeEach(() => {
+    useSoundtrackStore.getState().resetSoundtrack();
+  });
+
+  it('starts cue preview and sets status to playing, then stops preview and pauses', async () => {
+    const fakePlayer = new FakePlayer();
+    useSoundtrackStore.getState().registerSoundtrackPlayer(fakePlayer);
+
+    const audioCue: AudioCue = {
+      id: 'cue-p1',
+      startCfi: 'epubcfi(/6/2!/4/2:0)',
+      type: 'audio',
+      assetId: 'asset-p1',
+      startSec: 1.5,
+      loopStartSec: 1.5,
+      loopEndSec: 5.0,
+      volume: 0.8,
+      crossfadeSec: 0.5,
+    };
+
+    const copy: EditableCopy = {
+      copyId: 'copy-prev',
+      sourcePackageId: 'src',
+      sourceManifestHash: 'hash',
+      editionId: 'ed-prev',
+      manifest: {
+        packageId: 'copy-prev',
+        title: 'Preview Copy',
+        version: 1,
+        manifestHash: '',
+        editionCompatibility: [],
+        assets: [
+          {
+            id: 'asset-p1',
+            path: 'audio/p1.mp3',
+            mimeType: 'audio/mpeg',
+            hash: 'h',
+            durationSec: 10,
+          },
+        ],
+        cues: [audioCue],
+      },
+      assetBytes: { 'asset-p1': mp3 },
+      createdAt: Date.now(),
+      modifiedAt: Date.now(),
+    };
+
+    useSoundtrackStore.getState().enterAuthoringMode(copy);
+    expect(useSoundtrackStore.getState().isAuthoringMode).toBe(true);
+
+    // Start preview
+    await useSoundtrackStore.getState().startCuePreview(audioCue);
+    expect(useSoundtrackStore.getState().isPreviewingCue).toBe(true);
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('playing');
+
+    // Stop preview
+    useSoundtrackStore.getState().stopCuePreview();
+    expect(useSoundtrackStore.getState().isPreviewingCue).toBe(false);
+    expect(useSoundtrackStore.getState().playbackStatus).toBe('paused');
+  });
+});
+
+// ── 11. Strict validation parity with #17 packageValidation contract ──────────
+
+describe('validateEditableCopy – strict packageValidation parity', () => {
+  const mp3 = createMinimalValidMp3Bytes();
+
+  function baseCopy(): EditableCopy {
+    const audioCue: AudioCue = {
+      id: 'cue-strict',
+      startCfi: 'epubcfi(/6/2!/4/2:0)',
+      type: 'audio',
+      assetId: 'asset-1',
+      startSec: 2.0,
+      loopStartSec: 2.0,
+      loopEndSec: 8.0,
+      volume: 1.0,
+      crossfadeSec: 0.5,
+    };
+    return {
+      copyId: 'copy-strict',
+      sourcePackageId: 'src',
+      sourceManifestHash: 'hash',
+      editionId: 'ed-strict',
+      manifest: {
+        packageId: 'copy-strict',
+        title: 'Strict Copy',
+        version: 1,
+        manifestHash: '',
+        editionCompatibility: [],
+        assets: [
+          {
+            id: 'asset-1',
+            path: 'audio/1.mp3',
+            mimeType: 'audio/mpeg',
+            hash: 'h',
+            durationSec: 10.0,
+          },
+        ],
+        cues: [audioCue],
+      },
+      assetBytes: { 'asset-1': mp3 },
+      createdAt: Date.now(),
+      modifiedAt: Date.now(),
+    };
+  }
+
+  it('rejects when loopStartSec < startSec', () => {
+    const copy = baseCopy();
+    (copy.manifest.cues[0] as AudioCue).startSec = 5.0;
+    (copy.manifest.cues[0] as AudioCue).loopStartSec = 2.0; // loopStartSec < startSec!
+
+    const res = validateEditableCopy(copy);
+    expect(res.valid).toBe(false);
+    expect(
+      res.issues.some((i) =>
+        i.message.includes('loopStartSec must be a finite number >= startSec'),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects when loopEndSec exceeds asset durationSec', () => {
+    const copy = baseCopy();
+    (copy.manifest.cues[0] as AudioCue).loopEndSec = 15.0; // asset.durationSec is 10.0!
+
+    const res = validateEditableCopy(copy);
+    expect(res.valid).toBe(false);
+    expect(res.issues.some((i) => i.message.includes('exceeds asset duration'))).toBe(true);
+  });
+
+  it('rejects when numeric parameters are NaN or Infinity', () => {
+    const copy = baseCopy();
+    (copy.manifest.cues[0] as AudioCue).startSec = NaN;
+
+    const res = validateEditableCopy(copy);
+    expect(res.valid).toBe(false);
+    expect(res.issues.some((i) => i.message.includes('startSec must be a finite number'))).toBe(
+      true,
+    );
+  });
+
+  it('rejects when crossfadeSec is negative', () => {
+    const copy = baseCopy();
+    (copy.manifest.cues[0] as AudioCue).crossfadeSec = -0.5;
+
+    const res = validateEditableCopy(copy);
+    expect(res.valid).toBe(false);
+    expect(
+      res.issues.some((i) => i.message.includes('crossfadeSec must be a finite number >= 0')),
+    ).toBe(true);
   });
 });

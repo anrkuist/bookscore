@@ -147,6 +147,44 @@ export function updateCopyTitle(copy: EditableCopy, title: string): EditableCopy
   };
 }
 
+/** Adds or replaces an audio asset in the copy along with its raw MP3 bytes. */
+export function addAssetToCopy(
+  copy: EditableCopy,
+  asset: SoundtrackAsset,
+  bytes: Uint8Array,
+): EditableCopy {
+  const existingAssets = copy.manifest.assets.filter((a) => a.id !== asset.id);
+  const updatedAssets = [...existingAssets, asset];
+  return {
+    ...copy,
+    manifest: {
+      ...copy.manifest,
+      assets: updatedAssets,
+    },
+    assetBytes: {
+      ...copy.assetBytes,
+      [asset.id]: bytes,
+    },
+    modifiedAt: Date.now(),
+  };
+}
+
+/** Removes an asset and its binary bytes from the copy. */
+export function removeAssetFromCopy(copy: EditableCopy, assetId: string): EditableCopy {
+  const updatedAssets = copy.manifest.assets.filter((a) => a.id !== assetId);
+  const nextAssetBytes = { ...copy.assetBytes };
+  delete nextAssetBytes[assetId];
+  return {
+    ...copy,
+    manifest: {
+      ...copy.manifest,
+      assets: updatedAssets,
+    },
+    assetBytes: nextAssetBytes,
+    modifiedAt: Date.now(),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Preview helper
 // ---------------------------------------------------------------------------
@@ -233,28 +271,79 @@ export function validateEditableCopy(copy: EditableCopy): EditableCopyValidation
     }
   }
 
-  // 4. Audio cue start/loop sanity
+  // 4. Audio cue start/loop/crossfade/volume sanity & asset duration alignment
+  const assetsMap = new Map<string, SoundtrackAsset>(copy.manifest.assets.map((a) => [a.id, a]));
+
   for (const cue of copy.manifest.cues) {
     if (cue.type !== 'audio') continue;
-    if (cue.startSec < 0) {
+
+    if (typeof cue.startSec !== 'number' || !Number.isFinite(cue.startSec) || cue.startSec < 0) {
       issues.push({
         severity: 'error',
         cueId: cue.id,
-        message: `Cue "${cue.id}" startSec must be >= 0.`,
+        message: `Cue "${cue.id}" startSec must be a finite number >= 0.`,
       });
     }
-    if (cue.loopEndSec <= cue.loopStartSec) {
+    if (
+      typeof cue.loopStartSec !== 'number' ||
+      !Number.isFinite(cue.loopStartSec) ||
+      (typeof cue.startSec === 'number' && cue.loopStartSec < cue.startSec)
+    ) {
       issues.push({
         severity: 'error',
         cueId: cue.id,
-        message: `Cue "${cue.id}" loopEndSec must be > loopStartSec.`,
+        message: `Cue "${cue.id}" loopStartSec must be a finite number >= startSec.`,
       });
     }
-    if (cue.volume < 0 || cue.volume > 1) {
+    if (
+      typeof cue.loopEndSec !== 'number' ||
+      !Number.isFinite(cue.loopEndSec) ||
+      (typeof cue.loopStartSec === 'number' && cue.loopEndSec <= cue.loopStartSec)
+    ) {
       issues.push({
         severity: 'error',
         cueId: cue.id,
-        message: `Cue "${cue.id}" volume must be between 0 and 1 (got ${cue.volume}).`,
+        message: `Cue "${cue.id}" loopEndSec must be a finite number > loopStartSec.`,
+      });
+    }
+
+    const asset = assetsMap.get(cue.assetId);
+    if (
+      asset &&
+      typeof asset.durationSec === 'number' &&
+      typeof cue.loopEndSec === 'number' &&
+      cue.loopEndSec > asset.durationSec
+    ) {
+      issues.push({
+        severity: 'error',
+        cueId: cue.id,
+        assetId: cue.assetId,
+        message: `Cue "${cue.id}" loopEndSec (${cue.loopEndSec}s) exceeds asset duration (${asset.durationSec}s).`,
+      });
+    }
+
+    if (
+      typeof cue.volume !== 'number' ||
+      !Number.isFinite(cue.volume) ||
+      cue.volume < 0 ||
+      cue.volume > 1
+    ) {
+      issues.push({
+        severity: 'error',
+        cueId: cue.id,
+        message: `Cue "${cue.id}" volume must be a finite number between 0 and 1 (got ${cue.volume}).`,
+      });
+    }
+
+    if (
+      typeof cue.crossfadeSec !== 'number' ||
+      !Number.isFinite(cue.crossfadeSec) ||
+      cue.crossfadeSec < 0
+    ) {
+      issues.push({
+        severity: 'error',
+        cueId: cue.id,
+        message: `Cue "${cue.id}" crossfadeSec must be a finite number >= 0.`,
       });
     }
   }

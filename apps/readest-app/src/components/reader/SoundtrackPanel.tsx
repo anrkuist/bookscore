@@ -33,10 +33,12 @@ import {
   StoredPackagesMap,
 } from '@/services/bookscore/persistence';
 import {
+  addAssetToCopy,
   addCueAtCfi,
   editCue,
   exportEditableCopy,
   makeEditableCopy,
+  removeAssetFromCopy,
   removeCue,
   updateCopyTitle,
   validateEditableCopy,
@@ -46,6 +48,7 @@ import {
   CueValidationIssue,
   InstalledPackage,
   SilenceCue,
+  SoundtrackAsset,
   SoundtrackCandidate,
   SoundtrackCue,
 } from '@/services/bookscore/types';
@@ -253,6 +256,193 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
     };
   }, [isPanelOpen, consentTarget, setPanelOpen]);
 
+  const storeCfi = useSoundtrackStore((s) => s.currentCfi);
+  const effectiveCfi = currentCfi || storeCfi || 'epubcfi(/6/2!/4/2:0)';
+
+  const assetFileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleMakeEditableCopy = useCallback(
+    async (pkg: InstalledPackage) => {
+      if (!appService || !currentEditionId) return;
+      setErrorMsg(null);
+      const fs = appService as unknown as FileSystem;
+      const res = await makeEditableCopy(
+        fs,
+        'Data',
+        pkg.packageId,
+        pkg.manifestHash,
+        currentEditionId,
+      );
+      if (!res.success) {
+        setErrorMsg(res.error);
+        return;
+      }
+      setAuthoringTitle(res.copy.manifest.title);
+      setValidationIssues([]);
+      setExportError(null);
+      enterAuthoringMode(res.copy);
+    },
+    [appService, currentEditionId, enterAuthoringMode],
+  );
+
+  const handleAssetFileUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file || !editableCopy) return;
+      try {
+        const buffer = await file.arrayBuffer();
+        const bytes = new Uint8Array(buffer);
+        const assetId = `asset-${Date.now()}`;
+        const exportPath = `audio/${assetId}.mp3`;
+
+        let durationSec = 10;
+        try {
+          const { defaultAudioDecoder } = await import('@/services/bookscore/packageValidation');
+          const decoded = await defaultAudioDecoder(bytes);
+          if (decoded?.durationSec && decoded.durationSec > 0) {
+            durationSec = Math.round(decoded.durationSec * 10) / 10;
+          }
+        } catch (_) {}
+
+        const { sha256Hex } = await import('@/services/bookscore/packageValidation');
+        const hash = await sha256Hex(bytes);
+
+        const newAsset: SoundtrackAsset = {
+          id: assetId,
+          path: exportPath,
+          mimeType: 'audio/mpeg',
+          hash,
+          durationSec,
+        };
+
+        const updated = addAssetToCopy(editableCopy, newAsset, bytes);
+        updateEditableCopy(updated);
+        setValidationIssues([]);
+      } finally {
+        if (assetFileInputRef.current) {
+          assetFileInputRef.current.value = '';
+        }
+      }
+    },
+    [editableCopy, updateEditableCopy],
+  );
+
+  const handleRemoveAsset = useCallback(
+    (assetId: string) => {
+      if (!editableCopy) return;
+      const updated = removeAssetFromCopy(editableCopy, assetId);
+      updateEditableCopy(updated);
+      setValidationIssues([]);
+    },
+    [editableCopy, updateEditableCopy],
+  );
+
+  const handleAddAudioCueHere = useCallback(() => {
+    if (!editableCopy) return;
+    const assets = editableCopy.manifest.assets;
+    const firstAsset = assets[0];
+    const assetId = firstAsset ? firstAsset.id : 'asset-1';
+    const duration = firstAsset ? firstAsset.durationSec : 10;
+
+    const newId = `cue-${Date.now()}`;
+    const newCue: AudioCue = {
+      id: newId,
+      startCfi: effectiveCfi,
+      type: 'audio',
+      assetId,
+      startSec: 0,
+      loopStartSec: 0,
+      loopEndSec: duration,
+      volume: 1,
+      crossfadeSec: 0.5,
+    };
+    const updated = addCueAtCfi(editableCopy, newCue);
+    updateEditableCopy(updated);
+    setEditingCue(newCue);
+    setValidationIssues([]);
+  }, [editableCopy, effectiveCfi, updateEditableCopy]);
+
+  const handleAddSilenceCueHere = useCallback(() => {
+    if (!editableCopy) return;
+    const newId = `cue-${Date.now()}`;
+    const newCue: SilenceCue = { id: newId, startCfi: effectiveCfi, type: 'silence' };
+    const updated = addCueAtCfi(editableCopy, newCue);
+    updateEditableCopy(updated);
+    setEditingCue(newCue);
+    setValidationIssues([]);
+  }, [editableCopy, effectiveCfi, updateEditableCopy]);
+
+  const handleRemoveCue = useCallback(
+    (cueId: string) => {
+      if (!editableCopy) return;
+      const updated = removeCue(editableCopy, cueId);
+      updateEditableCopy(updated);
+      if (editingCue?.id === cueId) setEditingCue(null);
+      setValidationIssues([]);
+    },
+    [editableCopy, editingCue, updateEditableCopy],
+  );
+
+  const handleEditCueSave = useCallback(
+    (cue: SoundtrackCue) => {
+      if (!editableCopy) return;
+      const updated = editCue(editableCopy, cue);
+      updateEditableCopy(updated);
+      setEditingCue(null);
+      setValidationIssues([]);
+    },
+    [editableCopy, updateEditableCopy],
+  );
+
+  const handleAuthoringTitleBlur = useCallback(() => {
+    if (!editableCopy) return;
+    const updated = updateCopyTitle(editableCopy, authoringTitle);
+    updateEditableCopy(updated);
+  }, [editableCopy, authoringTitle, updateEditableCopy]);
+
+  const handleValidate = useCallback(() => {
+    if (!editableCopy) return;
+    const result = validateEditableCopy(editableCopy);
+    setValidationIssues(result.issues);
+    setExportError(null);
+  }, [editableCopy]);
+
+  const handleExport = useCallback(async () => {
+    if (!editableCopy) return;
+    setIsExporting(true);
+    setExportError(null);
+    try {
+      const result = await exportEditableCopy(editableCopy);
+      if (!result.success) {
+        setExportError(result.error);
+        if ('issues' in result && result.issues) {
+          setValidationIssues(result.issues);
+        }
+        return;
+      }
+      // Trigger download in browser
+      if (typeof window !== 'undefined') {
+        const buf = result.archiveBytes.buffer.slice(
+          result.archiveBytes.byteOffset,
+          result.archiveBytes.byteOffset + result.archiveBytes.byteLength,
+        ) as ArrayBuffer;
+        const blob = new Blob([buf], { type: 'application/zip' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${editableCopy.manifest.title || 'soundtrack'}.bookscore`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+    } catch (err) {
+      setExportError(String(err));
+    } finally {
+      setIsExporting(false);
+    }
+  }, [editableCopy]);
+
   if (!isEnabled || !isPanelOpen) {
     return null;
   }
@@ -355,110 +545,6 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
       );
     }
   };
-
-  // ---------- Authoring mode handlers ----------
-
-  const handleMakeEditableCopy = useCallback(
-    async (pkg: InstalledPackage) => {
-      if (!appService || !currentEditionId) return;
-      setErrorMsg(null);
-      const fs = appService as unknown as FileSystem;
-      const res = await makeEditableCopy(
-        fs,
-        'Data',
-        pkg.packageId,
-        pkg.manifestHash,
-        currentEditionId,
-      );
-      if (!res.success) {
-        setErrorMsg(res.error);
-        return;
-      }
-      setAuthoringTitle(res.copy.manifest.title);
-      setValidationIssues([]);
-      setExportError(null);
-      enterAuthoringMode(res.copy);
-    },
-    [appService, currentEditionId, enterAuthoringMode],
-  );
-
-  const handleAddCueHere = useCallback(() => {
-    if (!editableCopy) return;
-    const cfi = currentCfi || 'epubcfi(/6/2!/4/2:0)';
-    const newId = `cue-${Date.now()}`;
-    const newCue: SilenceCue = { id: newId, startCfi: cfi, type: 'silence' };
-    const updated = addCueAtCfi(editableCopy, newCue);
-    updateEditableCopy(updated);
-    setEditingCue(newCue);
-    setValidationIssues([]);
-  }, [editableCopy, currentCfi, updateEditableCopy]);
-
-  const handleRemoveCue = useCallback(
-    (cueId: string) => {
-      if (!editableCopy) return;
-      const updated = removeCue(editableCopy, cueId);
-      updateEditableCopy(updated);
-      if (editingCue?.id === cueId) setEditingCue(null);
-      setValidationIssues([]);
-    },
-    [editableCopy, editingCue, updateEditableCopy],
-  );
-
-  const handleEditCueSave = useCallback(
-    (cue: SoundtrackCue) => {
-      if (!editableCopy) return;
-      const updated = editCue(editableCopy, cue);
-      updateEditableCopy(updated);
-      setEditingCue(null);
-      setValidationIssues([]);
-    },
-    [editableCopy, updateEditableCopy],
-  );
-
-  const handleAuthoringTitleBlur = useCallback(() => {
-    if (!editableCopy) return;
-    const updated = updateCopyTitle(editableCopy, authoringTitle);
-    updateEditableCopy(updated);
-  }, [editableCopy, authoringTitle, updateEditableCopy]);
-
-  const handleValidate = useCallback(() => {
-    if (!editableCopy) return;
-    const result = validateEditableCopy(editableCopy);
-    setValidationIssues(result.issues);
-    setExportError(null);
-  }, [editableCopy]);
-
-  const handleExport = useCallback(async () => {
-    if (!editableCopy) return;
-    setIsExporting(true);
-    setExportError(null);
-    try {
-      const result = await exportEditableCopy(editableCopy);
-      if (!result.success) {
-        setExportError(result.error);
-        if ('issues' in result && result.issues) {
-          setValidationIssues(result.issues);
-        }
-        return;
-      }
-      // Trigger download in browser
-      if (typeof window !== 'undefined') {
-        const buf = result.archiveBytes.buffer.slice(
-          result.archiveBytes.byteOffset,
-          result.archiveBytes.byteOffset + result.archiveBytes.byteLength,
-        ) as ArrayBuffer;
-        const blob = new Blob([buf], { type: 'application/zip' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${editableCopy.manifest.title.replace(/[^a-z0-9]/gi, '_')}.bookscore`;
-        a.click();
-        URL.revokeObjectURL(url);
-      }
-    } finally {
-      setIsExporting(false);
-    }
-  }, [editableCopy]);
 
   return (
     <>
@@ -786,19 +872,83 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                 />
               </label>
 
+              {/* MP3 Assets section */}
+              <div>
+                <div className='flex items-center justify-between mb-1.5'>
+                  <span className='text-xs font-semibold'>{_('MP3 Assets')}</span>
+                  <input
+                    type='file'
+                    ref={assetFileInputRef}
+                    accept='audio/mpeg,.mp3'
+                    className='hidden'
+                    onChange={handleAssetFileUpload}
+                  />
+                  <button
+                    type='button'
+                    id='upload-mp3-asset'
+                    className='btn btn-xs btn-ghost border border-base-300 eink-bordered gap-1'
+                    onClick={() => assetFileInputRef.current?.click()}
+                    aria-label={_('Upload MP3 asset')}
+                  >
+                    + {_('Upload MP3')}
+                  </button>
+                </div>
+
+                <div className='space-y-1 max-h-32 overflow-y-auto pe-1'>
+                  {editableCopy.manifest.assets.length === 0 && (
+                    <p className='text-xs text-neutral-content italic py-0.5'>
+                      {_('No MP3 assets added yet.')}
+                    </p>
+                  )}
+                  {editableCopy.manifest.assets.map((asset) => (
+                    <div
+                      key={asset.id}
+                      className='flex items-center justify-between gap-1 rounded border border-base-300 bg-base-100 px-2 py-1 text-xs eink-bordered'
+                    >
+                      <div className='min-w-0 flex-1 truncate'>
+                        <span className='font-medium'>{asset.id}</span>
+                        <span className='text-[10px] text-neutral-content ms-1'>
+                          ({asset.durationSec}s)
+                        </span>
+                      </div>
+                      <button
+                        type='button'
+                        id={`remove-asset-${asset.id}`}
+                        className='btn btn-xs btn-ghost p-0.5 text-error shrink-0'
+                        onClick={() => handleRemoveAsset(asset.id)}
+                        aria-label={_('Remove asset')}
+                      >
+                        <MdDelete className='h-3.5 w-3.5' />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               {/* Cue list */}
               <div>
                 <div className='flex items-center justify-between mb-1.5'>
                   <span className='text-xs font-semibold'>{_('Cues')}</span>
-                  <button
-                    type='button'
-                    id='add-cue-at-position'
-                    className='btn btn-xs btn-ghost border border-base-300 eink-bordered gap-1'
-                    onClick={handleAddCueHere}
-                    aria-label={_('Add cue at current reading position')}
-                  >
-                    + {_('At this position')}
-                  </button>
+                  <div className='flex gap-1'>
+                    <button
+                      type='button'
+                      id='add-audio-cue-at-position'
+                      className='btn btn-xs btn-ghost border border-base-300 eink-bordered gap-1'
+                      onClick={handleAddAudioCueHere}
+                      aria-label={_('Add Audio cue at current reading position')}
+                    >
+                      + {_('Audio Cue')}
+                    </button>
+                    <button
+                      type='button'
+                      id='add-silence-cue-at-position'
+                      className='btn btn-xs btn-ghost border border-base-300 eink-bordered gap-1'
+                      onClick={handleAddSilenceCueHere}
+                      aria-label={_('Add Silence cue at current reading position')}
+                    >
+                      + {_('Silence Cue')}
+                    </button>
+                  </div>
                 </div>
 
                 <div className='space-y-1.5 max-h-40 overflow-y-auto'>
@@ -873,9 +1023,10 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
               </div>
 
               {/* Inline cue editor */}
-              {editingCue && editingCue.type === 'audio' && (
+              {editingCue && (
                 <CueEditor
                   cue={editingCue}
+                  assets={editableCopy.manifest.assets}
                   onSave={handleEditCueSave}
                   onCancel={() => setEditingCue(null)}
                   _={_}
@@ -990,74 +1141,158 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
 };
 
 // ---------------------------------------------------------------------------
-// CueEditor – inline editor for a single AudioCue's parameters
+// CueEditor – inline editor for SoundtrackCue (Audio or Silence)
 // ---------------------------------------------------------------------------
 
 interface CueEditorProps {
-  cue: AudioCue;
+  cue: SoundtrackCue;
+  assets: SoundtrackAsset[];
   onSave: (cue: SoundtrackCue) => void;
   onCancel: () => void;
   _: (key: string) => string;
 }
 
-const CueEditor: React.FC<CueEditorProps> = ({ cue, onSave, onCancel, _ }) => {
-  const [startSec, setStartSec] = useState(String(cue.startSec));
-  const [loopStartSec, setLoopStartSec] = useState(String(cue.loopStartSec));
-  const [loopEndSec, setLoopEndSec] = useState(String(cue.loopEndSec));
-  const [volume, setVolume] = useState(String(cue.volume));
-  const [crossfadeSec, setCrossfadeSec] = useState(String(cue.crossfadeSec));
+const CueEditor: React.FC<CueEditorProps> = ({ cue, assets, onSave, onCancel, _ }) => {
+  const [cueType, setCueType] = useState<'audio' | 'silence'>(cue.type);
+  const [assetId, setAssetId] = useState<string>(
+    cue.type === 'audio' ? cue.assetId : assets[0]?.id || 'asset-1',
+  );
+  const [startSec, setStartSec] = useState(cue.type === 'audio' ? String(cue.startSec) : '0');
+  const [loopStartSec, setLoopStartSec] = useState(
+    cue.type === 'audio' ? String(cue.loopStartSec) : '0',
+  );
+
+  const selectedAsset = assets.find((a) => a.id === assetId);
+  const defaultLoopEnd = selectedAsset ? String(selectedAsset.durationSec) : '10';
+
+  const [loopEndSec, setLoopEndSec] = useState(
+    cue.type === 'audio' ? String(cue.loopEndSec) : defaultLoopEnd,
+  );
+  const [volume, setVolume] = useState(cue.type === 'audio' ? String(cue.volume) : '1');
+  const [crossfadeSec, setCrossfadeSec] = useState(
+    cue.type === 'audio' ? String(cue.crossfadeSec) : '0.5',
+  );
 
   const handleSave = () => {
-    const updated: AudioCue = {
-      ...cue,
-      startSec: parseFloat(startSec) || 0,
-      loopStartSec: parseFloat(loopStartSec) || 0,
-      loopEndSec: parseFloat(loopEndSec) || cue.loopEndSec,
-      volume: Math.min(1, Math.max(0, parseFloat(volume) || cue.volume)),
-      crossfadeSec: parseFloat(crossfadeSec) || 0.5,
-    };
-    onSave(updated);
+    if (cueType === 'silence') {
+      const updated: SilenceCue = {
+        id: cue.id,
+        startCfi: cue.startCfi,
+        type: 'silence',
+      };
+      onSave(updated);
+    } else {
+      const updated: AudioCue = {
+        id: cue.id,
+        startCfi: cue.startCfi,
+        type: 'audio',
+        assetId,
+        startSec: parseFloat(startSec) || 0,
+        loopStartSec: parseFloat(loopStartSec) || 0,
+        loopEndSec: parseFloat(loopEndSec) || (selectedAsset ? selectedAsset.durationSec : 10),
+        volume: Math.min(1, Math.max(0, parseFloat(volume) || 1)),
+        crossfadeSec: parseFloat(crossfadeSec) || 0.5,
+      };
+      onSave(updated);
+    }
   };
 
   return (
     <div className='rounded border border-primary/30 bg-base-100 p-2.5 space-y-2 text-xs eink-bordered'>
-      <p className='font-semibold text-primary/80'>
-        {_('Edit Cue')}: {cue.id}
-      </p>
-      {[
-        { label: _('Start (s)'), value: startSec, setter: setStartSec, id: `cue-start-${cue.id}` },
-        {
-          label: _('Loop start (s)'),
-          value: loopStartSec,
-          setter: setLoopStartSec,
-          id: `cue-loop-start-${cue.id}`,
-        },
-        {
-          label: _('Loop end (s)'),
-          value: loopEndSec,
-          setter: setLoopEndSec,
-          id: `cue-loop-end-${cue.id}`,
-        },
-        { label: _('Volume (0-1)'), value: volume, setter: setVolume, id: `cue-volume-${cue.id}` },
-        {
-          label: _('Crossfade (s)'),
-          value: crossfadeSec,
-          setter: setCrossfadeSec,
-          id: `cue-crossfade-${cue.id}`,
-        },
-      ].map(({ label, value, setter, id }) => (
-        <label key={id} className='flex items-center justify-between gap-2'>
-          <span className='text-neutral-content shrink-0'>{label}</span>
-          <input
-            id={id}
-            type='number'
-            step='0.01'
-            className='input input-xs border border-base-300 bg-base-100 w-20 text-right eink-bordered'
-            value={value}
-            onChange={(e) => setter(e.target.value)}
-          />
+      <div className='flex items-center justify-between'>
+        <p className='font-semibold text-primary/80'>
+          {_('Edit Cue')}: {cue.id}
+        </p>
+        <label className='flex items-center gap-1.5 text-xs'>
+          <span>{_('Type')}:</span>
+          <select
+            id={`cue-type-${cue.id}`}
+            value={cueType}
+            onChange={(e) => setCueType(e.target.value as 'audio' | 'silence')}
+            className='select select-xs border border-base-300 bg-base-100 eink-bordered'
+          >
+            <option value='audio'>{_('Audio')}</option>
+            <option value='silence'>{_('Silence')}</option>
+          </select>
         </label>
-      ))}
+      </div>
+
+      {cueType === 'audio' && (
+        <>
+          <label className='flex items-center justify-between gap-2'>
+            <span className='text-neutral-content shrink-0'>{_('Asset')}</span>
+            <select
+              id={`cue-asset-${cue.id}`}
+              value={assetId}
+              onChange={(e) => {
+                const nextAssetId = e.target.value;
+                setAssetId(nextAssetId);
+                const a = assets.find((x) => x.id === nextAssetId);
+                if (a) setLoopEndSec(String(a.durationSec));
+              }}
+              className='select select-xs border border-base-300 bg-base-100 flex-1 max-w-[160px] eink-bordered'
+            >
+              {assets.length === 0 && <option value='asset-1'>asset-1</option>}
+              {assets.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.id} ({a.durationSec}s)
+                </option>
+              ))}
+            </select>
+          </label>
+          {[
+            {
+              label: _('Start (s)'),
+              value: startSec,
+              setter: setStartSec,
+              id: `cue-start-${cue.id}`,
+            },
+            {
+              label: _('Loop start (s)'),
+              value: loopStartSec,
+              setter: setLoopStartSec,
+              id: `cue-loop-start-${cue.id}`,
+            },
+            {
+              label: _('Loop end (s)'),
+              value: loopEndSec,
+              setter: setLoopEndSec,
+              id: `cue-loop-end-${cue.id}`,
+            },
+            {
+              label: _('Volume (0-1)'),
+              value: volume,
+              setter: setVolume,
+              id: `cue-volume-${cue.id}`,
+            },
+            {
+              label: _('Crossfade (s)'),
+              value: crossfadeSec,
+              setter: setCrossfadeSec,
+              id: `cue-crossfade-${cue.id}`,
+            },
+          ].map(({ label, value, setter, id }) => (
+            <label key={id} className='flex items-center justify-between gap-2'>
+              <span className='text-neutral-content shrink-0'>{label}</span>
+              <input
+                id={id}
+                type='number'
+                step='0.01'
+                className='input input-xs border border-base-300 bg-base-100 w-20 text-right eink-bordered'
+                value={value}
+                onChange={(e) => setter(e.target.value)}
+              />
+            </label>
+          ))}
+        </>
+      )}
+
+      {cueType === 'silence' && (
+        <p className='text-[11px] text-neutral-content italic py-1'>
+          {_('Silence cue will mute playback at this position.')}
+        </p>
+      )}
+
       <div className='flex gap-2 justify-end pt-1'>
         <button type='button' className='btn btn-xs btn-ghost eink-bordered' onClick={onCancel}>
           {_('Cancel')}

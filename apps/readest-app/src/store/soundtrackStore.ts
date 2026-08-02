@@ -16,7 +16,6 @@ import { loadRepairQueue, recordPackageRepairFailure } from '@/services/bookscor
 import { FileSystem } from '@/types/system';
 import { getInitializedAppService } from '@/services/environment';
 
-import { ttsSessionManager } from '@/services/tts/TTSSessionManager';
 import { eventDispatcher } from '@/utils/event';
 
 export interface SoundtrackStoreState {
@@ -32,6 +31,7 @@ export interface SoundtrackStoreState {
   volume: number;
   isPanelOpen: boolean;
   repairQueue: StoredRepairQueueMap;
+  currentCfi: string | null;
 
   /** Authoring mode: an in-progress editable copy being authored. */
   editableCopy: EditableCopy | null;
@@ -179,6 +179,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   volume: 1.0,
   isPanelOpen: false,
   repairQueue: {},
+  currentCfi: null,
   editableCopy: null,
   isAuthoringMode: false,
   isPreviewingCue: false,
@@ -291,6 +292,9 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   },
 
   reportLocation: (report: LocationReport) => {
+    if (report.cfi) {
+      set({ currentCfi: report.cfi });
+    }
     const { capabilityEnabled, activePackage, isUserPlaying, isGestureUnlocked } = get();
 
     if (!capabilityEnabled || !activePackage) {
@@ -389,8 +393,16 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
         set({ playbackStatus: 'playing' });
         // Requirement: Play stops active TTS ONLY when audio playback successfully starts
         if (typeof window !== 'undefined') {
-          const activeSession = ttsSessionManager.getActiveSession();
-          const targetBookKey = activeSession?.bookKey || activeBookKey || activeEditionId || '';
+          let targetBookKey = activeBookKey || activeEditionId || '';
+          const g = globalThis as unknown as {
+            ttsSessionManager?: { getActiveSession?: () => { bookKey?: string } };
+          };
+          if (g.ttsSessionManager) {
+            const activeSession = g.ttsSessionManager.getActiveSession?.();
+            if (activeSession?.bookKey) {
+              targetBookKey = activeSession.bookKey;
+            }
+          }
           eventDispatcher.dispatch('tts-stop', { bookKey: targetBookKey });
         }
       } else {
