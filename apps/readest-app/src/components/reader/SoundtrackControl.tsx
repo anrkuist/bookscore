@@ -22,11 +22,18 @@ export const SoundtrackControl: React.FC<SoundtrackControlProps> = ({ isMobile }
   const isPanelOpen = useSoundtrackStore((s) => s.isPanelOpen);
   const togglePanel = useSoundtrackStore((s) => s.togglePanel);
 
+  const repairQueue = useSoundtrackStore((s) => s.repairQueue);
+
   // Gating check: Web, iOS, Android remain healthy and show no soundtrack controls
   const isEnabled = capabilityEnabled && isBookScoreCapabilityEnabled({ isMobile });
   if (!isEnabled || !activePackage) {
     return null;
   }
+
+  const activeRepairItem = activePackage
+    ? (repairQueue[`${activePackage.packageId}:${activePackage.manifestHash}`] ??
+      repairQueue[activePackage.packageId])
+    : null;
 
   const isPlaying = playbackStatus === 'playing';
   const isGestureRequired = playbackStatus === 'gesture_required';
@@ -38,13 +45,15 @@ export const SoundtrackControl: React.FC<SoundtrackControlProps> = ({ isMobile }
       : _('Silence')
     : _('No Cue');
 
-  const statusTooltip = isPlaying
-    ? `${_('Soundtrack Playing')} (${cueLabel})`
-    : isGestureRequired
-      ? `${_('Click to enable Soundtrack Audio')} (${cueLabel})`
-      : isSilence
-        ? `${_('Soundtrack Quiet State')} (${cueLabel})`
-        : `${_('Soundtrack Paused')} (${cueLabel})`;
+  const statusTooltip = activeRepairItem
+    ? `${_('Soundtrack Quiet State (Repair Required)')} (${cueLabel})`
+    : isPlaying
+      ? `${_('Soundtrack Playing')} (${cueLabel})`
+      : isGestureRequired
+        ? `${_('Click to enable Soundtrack Audio')} (${cueLabel})`
+        : isSilence
+          ? `${_('Soundtrack Quiet State')} (${cueLabel})`
+          : `${_('Soundtrack Paused')} (${cueLabel})`;
 
   return (
     <>
@@ -62,17 +71,23 @@ export const SoundtrackControl: React.FC<SoundtrackControlProps> = ({ isMobile }
           <MdMusicNote
             className={clsx(
               'h-4 w-4 text-xs',
-              isPlaying ? 'text-primary not-eink:animate-pulse' : 'text-base-content/80',
+              activeRepairItem
+                ? 'text-warning'
+                : isPlaying
+                  ? 'text-primary not-eink:animate-pulse'
+                  : 'text-base-content/80',
             )}
           />
           <span className='text-xs max-w-[100px] truncate hidden sm:inline'>
-            {isPlaying
-              ? _('Playing')
-              : isGestureRequired
-                ? _('Click Play')
-                : isSilence
-                  ? _('Quiet')
-                  : _('Paused')}
+            {activeRepairItem
+              ? _('Quiet (Repair)')
+              : isPlaying
+                ? _('Playing')
+                : isGestureRequired
+                  ? _('Click Play')
+                  : isSilence
+                    ? _('Quiet')
+                    : _('Paused')}
           </span>
         </button>
       </div>

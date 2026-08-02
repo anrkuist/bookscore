@@ -81,3 +81,17 @@ export type PlaybackIntent = {
   volume: number;
   isGestureUnlocked: boolean;
 };
+
+export type RepairFailureReason = 'missing' | 'unreadable' | 'corrupt';
+
+export type RepairQueueItem = {
+  packageId: string;
+  manifestHash: string;
+  title: string;
+  reason: RepairFailureReason;
+  assetId?: string;
+  detectedAt: number;
+  affectedEditionIds: string[];
+};
+
+export type StoredRepairQueueMap = Record<string, RepairQueueItem>;

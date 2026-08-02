@@ -5,11 +5,13 @@ import {
   LocationReport,
   PlaybackStatus,
   SoundtrackCue,
+  StoredRepairQueueMap,
 } from '@/services/bookscore/types';
 import { LocationReportSeam } from '@/services/bookscore/locationSeam';
 import { SoundtrackPlayer } from '@/services/bookscore/soundtrackPlayer';
 import { findCueForCfi } from '@/services/bookscore/cfiUtils';
-import { loadSoundtrackAssetFile } from '@/services/bookscore/assetStorage';
+import { verifySoundtrackAsset } from '@/services/bookscore/assetStorage';
+import { loadRepairQueue, recordPackageRepairFailure } from '@/services/bookscore/persistence';
 import { FileSystem } from '@/types/system';
 import { getInitializedAppService } from '@/services/environment';
 
@@ -28,6 +30,7 @@ export interface SoundtrackStoreState {
   isUserPlaying: boolean;
   volume: number;
   isPanelOpen: boolean;
+  repairQueue: StoredRepairQueueMap;
 
   // Actions
   setCapabilityEnabled: (enabled: boolean) => void;
@@ -47,6 +50,8 @@ export interface SoundtrackStoreState {
   setVolume: (volume: number) => void;
   setPanelOpen: (open: boolean) => void;
   togglePanel: () => void;
+  setRepairQueue: (queue: StoredRepairQueueMap) => void;
+  loadRepairQueueAction: (customFs?: FileSystem) => Promise<StoredRepairQueueMap>;
 }
 
 const locationSeam = new LocationReportSeam();
@@ -58,39 +63,79 @@ async function resolveAndPlayAudioCue(
   player: SoundtrackPlayer,
   customFs?: FileSystem,
   isResume = false,
+  activeEditionId?: string | null,
+  updateRepairQueueState?: (queue: StoredRepairQueueMap) => void,
 ): Promise<boolean> {
   if (cue.type !== 'audio') return false;
 
   const asset = pkg.manifest.assets.find((a) => a.id === cue.assetId);
+  const appSvc = getInitializedAppService();
+  const fs = customFs ?? (appSvc as unknown as FileSystem | undefined);
+
   if (!asset) {
     player.transitionToSilence();
+    if (fs) {
+      const updated = await recordPackageRepairFailure(fs, 'Data', {
+        packageId: pkg.packageId,
+        manifestHash: pkg.manifestHash,
+        title: pkg.manifest.title,
+        reason: 'missing',
+        detectedAt: Date.now(),
+        affectedEditionIds: activeEditionId ? [activeEditionId] : [],
+      });
+      updateRepairQueueState?.(updated);
+    }
     return false;
   }
 
-  const appSvc = getInitializedAppService();
-  const fs = customFs ?? (appSvc as unknown as FileSystem | undefined);
-  let audioData: ArrayBuffer | null = null;
+  let audioData: ArrayBuffer | undefined;
 
   try {
     if (fs) {
-      audioData = await loadSoundtrackAssetFile(
+      const verifyRes = await verifySoundtrackAsset(
         fs,
         'Data',
         pkg.packageId,
         asset.id,
         pkg.manifestHash,
+        asset.hash,
       );
-      if (!audioData || audioData.byteLength === 0) {
+
+      if (!verifyRes.ok || !verifyRes.buffer) {
         player.transitionToSilence();
+        const reason = verifyRes.reason || 'missing';
+        const updated = await recordPackageRepairFailure(fs, 'Data', {
+          packageId: pkg.packageId,
+          manifestHash: pkg.manifestHash,
+          title: pkg.manifest.title,
+          reason,
+          assetId: asset.id,
+          detectedAt: Date.now(),
+          affectedEditionIds: activeEditionId ? [activeEditionId] : [],
+        });
+        updateRepairQueueState?.(updated);
         return false;
       }
+      audioData = verifyRes.buffer;
     }
 
-    await player.playCue(cue, audioData ?? undefined, isResume);
+    await player.playCue(cue, audioData, isResume);
     return true;
   } catch (err) {
     console.warn('Failed to load or play soundtrack audio cue, falling back to safe silence:', err);
     player.transitionToSilence();
+    if (fs) {
+      const updated = await recordPackageRepairFailure(fs, 'Data', {
+        packageId: pkg.packageId,
+        manifestHash: pkg.manifestHash,
+        title: pkg.manifest.title,
+        reason: 'corrupt',
+        assetId: asset.id,
+        detectedAt: Date.now(),
+        affectedEditionIds: activeEditionId ? [activeEditionId] : [],
+      });
+      updateRepairQueueState?.(updated);
+    }
     return false;
   }
 }
@@ -107,6 +152,24 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
   isUserPlaying: false,
   volume: 1.0,
   isPanelOpen: false,
+  repairQueue: {},
+
+  setRepairQueue: (queue: StoredRepairQueueMap) => {
+    set({ repairQueue: queue });
+  },
+
+  loadRepairQueueAction: async (customFs?: FileSystem) => {
+    const appSvc = getInitializedAppService();
+    const fs = customFs ?? (appSvc as unknown as FileSystem | undefined);
+    if (!fs) return {};
+    try {
+      const queue = await loadRepairQueue(fs, 'Data');
+      set({ repairQueue: queue });
+      return queue;
+    } catch (_) {
+      return {};
+    }
+  },
 
   setCapabilityEnabled: (enabled: boolean) => {
     set({ capabilityEnabled: enabled });
@@ -236,13 +299,19 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
       } else {
         set({ playbackStatus: 'playing' });
         if (playerInstance) {
-          void resolveAndPlayAudioCue(newCue, activePackage, playerInstance, undefined, false).then(
-            (success) => {
-              if (!success) {
-                set({ playbackStatus: 'silence' });
-              }
-            },
-          );
+          void resolveAndPlayAudioCue(
+            newCue,
+            activePackage,
+            playerInstance,
+            undefined,
+            false,
+            get().activeEditionId,
+            (queue) => set({ repairQueue: queue }),
+          ).then((success) => {
+            if (!success) {
+              set({ playbackStatus: 'silence' });
+            }
+          });
         }
       }
     } else {
@@ -284,6 +353,8 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
         playerInstance,
         customFs,
         isResume,
+        activeEditionId,
+        (queue) => set({ repairQueue: queue }),
       );
       if (success) {
         set({ playbackStatus: 'playing' });

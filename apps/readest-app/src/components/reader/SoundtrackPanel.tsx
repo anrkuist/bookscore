@@ -6,6 +6,7 @@ import {
   MdCheckCircle,
   MdClose,
   MdMusicNote,
+  MdOutlineFileUpload,
   MdPause,
   MdPlayArrow,
   MdVolumeOff,
@@ -20,6 +21,7 @@ import {
   associateSoundtrackToEdition,
   computeSoundtrackCandidates,
   detachSoundtrackFromEdition,
+  importAndAssociateBookScorePackage,
 } from '@/services/bookscore/importService';
 import {
   loadInstalledPackages,
@@ -48,6 +50,8 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
   const playbackStatus = useSoundtrackStore((s) => s.playbackStatus);
   const volume = useSoundtrackStore((s) => s.volume);
   const isPanelOpen = useSoundtrackStore((s) => s.isPanelOpen);
+  const repairQueue = useSoundtrackStore((s) => s.repairQueue);
+  const loadRepairQueueAction = useSoundtrackStore((s) => s.loadRepairQueueAction);
   const activeEditionIdFromStore = useSoundtrackStore((s) => s.activeEditionId);
   const activeBookKeyFromStore = useSoundtrackStore((s) => s.activeBookKey);
 
@@ -67,9 +71,15 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
 
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const repairFileInputRef = useRef<HTMLInputElement>(null);
   const previouslyFocusedElementRef = useRef<HTMLElement | null>(null);
 
   const isEnabled = capabilityEnabled && isBookScoreCapabilityEnabled({ isMobile });
+
+  const activeRepairItem = activePackage
+    ? (repairQueue[`${activePackage.packageId}:${activePackage.manifestHash}`] ??
+      repairQueue[activePackage.packageId])
+    : null;
 
   const refreshAttachments = async (): Promise<{
     packages: StoredPackagesMap;
@@ -95,8 +105,51 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
   useEffect(() => {
     if (isEnabled && isPanelOpen) {
       refreshAttachments();
+      loadRepairQueueAction();
     }
   }, [isEnabled, isPanelOpen, currentEditionId]);
+
+  const handleRepairFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !appService || !currentEditionId) return;
+    setErrorMsg(null);
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      const fs = appService as unknown as FileSystem;
+
+      const res = await importAndAssociateBookScorePackage(
+        fs,
+        'Data',
+        bytes,
+        currentEditionId,
+        undefined,
+        { autoAttach: true },
+      );
+
+      if (!res.success) {
+        setErrorMsg(res.error || _('Failed to repair soundtrack package.'));
+        return;
+      }
+
+      const fresh = await refreshAttachments();
+      await loadRepairQueueAction();
+      loadSoundtrackForBook(
+        currentEditionId,
+        fresh.packages,
+        fresh.associations,
+        undefined,
+        activeBookKeyFromStore || undefined,
+      );
+    } catch (err) {
+      setErrorMsg(`Repair failed: ${err}`);
+    } finally {
+      if (repairFileInputRef.current) {
+        repairFileInputRef.current.value = '';
+      }
+    }
+  };
 
   // Keyboard focus lifecycle & Tab/Shift+Tab focus containment
   useEffect(() => {
@@ -319,7 +372,12 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
               <span className='text-xs font-semibold uppercase tracking-wider text-neutral-content/90'>
                 {_('Status')}
               </span>
-              {isPlaying ? (
+              {activeRepairItem ? (
+                <span className='badge badge-error gap-1 text-xs py-0.5 px-2 font-medium text-white'>
+                  <MdWarning className='h-3 w-3 me-0.5 inline' />
+                  {_('Silence (Repair Required)')}
+                </span>
+              ) : isPlaying ? (
                 <span className='badge badge-success gap-1 text-xs py-0.5 px-2 font-medium text-white'>
                   {_('Playing')}
                 </span>
@@ -339,6 +397,39 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({ editionId, isM
             </div>
 
             <div className='text-sm font-medium text-base-content/90 line-clamp-1'>{cueLabel}</div>
+
+            {activeRepairItem && (
+              <div className='p-3 rounded-lg border border-warning bg-warning/10 space-y-2 text-xs eink-bordered'>
+                <div className='flex items-center gap-1.5 font-bold text-base-content'>
+                  <MdWarning className='h-4 w-4 text-warning shrink-0' />
+                  <span>
+                    {_('Package failure ({reason})', { reason: activeRepairItem.reason })}
+                  </span>
+                </div>
+                <p className='text-neutral-content text-[11px] leading-relaxed'>
+                  {_(
+                    'Audio file for this soundtrack is missing, unreadable, or corrupted. Re-import the package to repair.',
+                  )}
+                </p>
+                <div className='pt-1 flex items-center gap-2'>
+                  <input
+                    type='file'
+                    ref={repairFileInputRef}
+                    accept='.bookscore,.zip'
+                    className='hidden'
+                    onChange={handleRepairFileChange}
+                  />
+                  <button
+                    type='button'
+                    className='btn btn-xs btn-contrast gap-1.5 font-semibold'
+                    onClick={() => repairFileInputRef.current?.click()}
+                  >
+                    <MdOutlineFileUpload className='h-3.5 w-3.5' />
+                    {_('Repair Soundtrack')}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Explicit Play / Pause / Resume Button */}
             <div className='pt-1 flex items-center justify-center'>
