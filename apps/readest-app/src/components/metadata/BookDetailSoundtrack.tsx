@@ -363,7 +363,7 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
                             v{cand.package.manifest.version}
                           </p>
                         </div>
-                        <div>
+                        <div className='flex items-center gap-2 flex-wrap justify-end'>
                           {cand.isSelected ? (
                             <span className='text-xs font-semibold text-primary px-2 py-1 bg-primary/10 rounded'>
                               {_('Active')}
@@ -383,6 +383,12 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book
                                 : _('Attach (Consent Required)')}
                             </button>
                           )}
+                          <button
+                            className='btn btn-xs btn-outline btn-error'
+                            onClick={() => setRemovalTarget(cand.package)}
+                          >
+                            {_('Remove Package')}
+                          </button>
                         </div>
                       </div>
                     ))}

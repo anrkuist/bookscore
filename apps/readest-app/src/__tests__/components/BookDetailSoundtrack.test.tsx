@@ -114,9 +114,11 @@ describe('BookDetailSoundtrack Component', () => {
   });
 
   it('renders active soundtrack details and verified badge on desktop', async () => {
-    const { getByText, findByText } = render(<BookDetailSoundtrack book={makeBook()} />);
+    const { getAllByText, getByText, findByText } = render(
+      <BookDetailSoundtrack book={makeBook()} />,
+    );
     expect(await findByText('Soundtrack')).toBeTruthy();
-    expect(getByText('Verified Soundtrack Package')).toBeTruthy();
+    expect(getAllByText('Verified Soundtrack Package').length).toBeGreaterThan(0);
     expect(getByText('Verified Association')).toBeTruthy();
   });
 
@@ -126,7 +128,7 @@ describe('BookDetailSoundtrack Component', () => {
       .mockResolvedValue({ success: true });
 
     const { findByText, getByText } = render(<BookDetailSoundtrack book={makeBook()} />);
-    await findByText('Verified Soundtrack Package');
+    await findByText('Soundtrack');
 
     const detachBtn = getByText('Detach');
     fireEvent.click(detachBtn);
@@ -135,10 +137,12 @@ describe('BookDetailSoundtrack Component', () => {
   });
 
   it('opens safe removal confirmation dialog when Remove Package is clicked', async () => {
-    const { findByText, getByText } = render(<BookDetailSoundtrack book={makeBook()} />);
-    await findByText('Verified Soundtrack Package');
+    const { findByText, getAllByText, getByText } = render(
+      <BookDetailSoundtrack book={makeBook()} />,
+    );
+    await findByText('Soundtrack');
 
-    const removeBtn = getByText('Remove Package');
+    const removeBtn = getAllByText('Remove Package')[0]!;
     fireEvent.click(removeBtn);
 
     await waitFor(() => {
@@ -160,6 +164,37 @@ describe('BookDetailSoundtrack Component', () => {
     await waitFor(() => {
       expect(getByText('Attach Unverified Soundtrack')).toBeTruthy();
       expect(getByText('Edition Fingerprint Mismatch')).toBeTruthy();
+    });
+  });
+
+  it('allows removing an unselected installed candidate package directly without changing active selection', async () => {
+    const removeSpy = vi
+      .spyOn(importServiceModule, 'removeInstalledPackage')
+      .mockResolvedValue({ success: true, affectedEditionIds: [] });
+    const associateSpy = vi.spyOn(importServiceModule, 'associateSoundtrackToEdition');
+
+    const { findByText, getAllByText, getByText } = render(
+      <BookDetailSoundtrack book={makeBook()} />,
+    );
+    await findByText('Unverified Mismatched Package');
+
+    const removeBtns = getAllByText('Remove Package');
+    // The last Remove Package button belongs to the unselected candidate 'pkg-2'
+    fireEvent.click(removeBtns[removeBtns.length - 1]!);
+
+    await waitFor(() => {
+      expect(getByText('Remove Soundtrack Package')).toBeTruthy();
+      expect(
+        getByText(/Are you sure you want to remove 'Unverified Mismatched Package'/),
+      ).toBeTruthy();
+    });
+
+    const confirmBtn = getAllByText('Remove Package').pop()!;
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(removeSpy).toHaveBeenCalledWith(expect.anything(), 'Data', 'pkg-2', 'hash2');
+      expect(associateSpy).not.toHaveBeenCalled();
     });
   });
 });
