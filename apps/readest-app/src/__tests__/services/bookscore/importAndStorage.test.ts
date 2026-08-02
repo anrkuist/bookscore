@@ -127,16 +127,17 @@ describe('BookScore Import and Binary Storage Integration', () => {
 
   it('atomically imports, validates, persists asset files, saves package and association, and loads into soundtrack store', async () => {
     const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
+    const editionId = 'edition-epub-prod-123';
     const assetAudioBytes = createMinimalValidMp3Bytes();
     const zipBytes = await createDevelopmentFixturePackageBytes(
       assetAudioBytes,
       'pkg-prod-seam',
       'Production Seam Test Soundtrack',
+      editionId,
     );
 
-    const editionId = 'edition-epub-prod-123';
-
     const importRes = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
+
     expect(importRes.success).toBe(true);
     expect(importRes.package).toBeDefined();
     expect(importRes.association).toBeDefined();
@@ -273,7 +274,13 @@ describe('BookScore Import and Binary Storage Integration', () => {
   it('restores original metadata on package/association persistence failure during import', async () => {
     const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
     const mp3Bytes = createMinimalValidMp3Bytes();
-    const zipBytes = await createDevelopmentFixturePackageBytes(mp3Bytes, 'pkg-meta-rollback');
+    const editionId = 'edition-meta-rollback';
+    const zipBytes = await createDevelopmentFixturePackageBytes(
+      mp3Bytes,
+      'pkg-meta-rollback',
+      'Development EPUB Soundtrack',
+      editionId,
+    );
 
     // Pre-existing package and association state
     const initialPkg = {
@@ -330,7 +337,7 @@ describe('BookScore Import and Binary Storage Integration', () => {
       faultyFs,
       baseDir,
       zipBytes,
-      'edition-fail-assoc',
+      editionId,
       mockDecoder,
     );
 
@@ -346,12 +353,13 @@ describe('BookScore Import and Binary Storage Integration', () => {
     const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
     const { saveLocalAssociations } = await import('@/services/bookscore/persistence');
     const mp3Bytes = createMinimalValidMp3Bytes();
+    const editionId = 'edition-dedupe-1';
     const zipBytes = await createDevelopmentFixturePackageBytes(
       mp3Bytes,
       'pkg-dedupe-test',
       'Dedupe Test Soundtrack',
+      editionId,
     );
-    const editionId = 'edition-dedupe-1';
 
     // First import
     const res1 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
@@ -379,14 +387,15 @@ describe('BookScore Import and Binary Storage Integration', () => {
   it('allows coexistence of changed-hash revisions and retains addressable associations for both', async () => {
     const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
     const mp3Bytes = createMinimalValidMp3Bytes();
+    const editionId = 'edition-coexist-1';
 
     // Import Revision 1
     const zipBytesV1 = await createDevelopmentFixturePackageBytes(
       mp3Bytes,
       'pkg-coexist',
       'Coexistence Soundtrack Rev 1',
+      editionId,
     );
-    const editionId = 'edition-coexist-1';
     const res1 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytesV1, editionId);
     expect(res1.success).toBe(true);
     const pkg1Key = `${res1.package!.packageId}:${res1.package!.manifestHash}`;
@@ -396,6 +405,7 @@ describe('BookScore Import and Binary Storage Integration', () => {
       mp3Bytes,
       'pkg-coexist',
       'Coexistence Soundtrack Rev 2 Updated',
+      editionId,
     );
     const res2 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytesV2, editionId);
     expect(res2.success).toBe(true);
@@ -434,6 +444,7 @@ describe('BookScore Import and Binary Storage Integration', () => {
       mp3BytesV1,
       packageId,
       'Namespaced Rev 1',
+      editionId,
     );
     const res1 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytesV1, editionId);
     expect(res1.success).toBe(true);
@@ -448,6 +459,7 @@ describe('BookScore Import and Binary Storage Integration', () => {
       mp3BytesV2,
       packageId,
       'Namespaced Rev 2',
+      editionId,
     );
 
     // Faulty FS that fails when saving soundtrack_packages.json on Revision 2

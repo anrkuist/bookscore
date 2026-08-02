@@ -1,5 +1,10 @@
 import { BaseDir, FileSystem } from '@/types/system';
-import { InstalledPackage, LocalAssociation } from './types';
+import {
+  InstalledPackage,
+  LocalAssociation,
+  SoundtrackCandidate,
+  SoundtrackPackageManifest,
+} from './types';
 import { AudioDecoderFn, sha256Hex, validateBookScorePackageArchive } from './packageValidation';
 import { saveSoundtrackAssetFile } from './assetStorage';
 import {
@@ -7,6 +12,8 @@ import {
   loadLocalAssociations,
   saveInstalledPackages,
   saveLocalAssociations,
+  StoredAssociationsMap,
+  StoredPackagesMap,
 } from './persistence';
 
 export type ImportAndAssociateResult = {
@@ -15,6 +22,269 @@ export type ImportAndAssociateResult = {
   association?: LocalAssociation;
   error?: string;
 };
+
+export type ImportPackageOptions = {
+  autoAttach?: boolean;
+  consentGiven?: boolean;
+};
+
+/**
+ * Checks whether an EPUB editionId matches a package manifest's editionCompatibility entries.
+ */
+export function isEditionCompatibleWithManifest(
+  manifest: SoundtrackPackageManifest,
+  editionId: string,
+): boolean {
+  if (!manifest?.editionCompatibility || !Array.isArray(manifest.editionCompatibility)) {
+    return false;
+  }
+  return manifest.editionCompatibility.some((compat) => {
+    if (compat.algorithm === 'readest-partial-md5-v1') {
+      return compat.digest.toLowerCase() === editionId.toLowerCase();
+    }
+    return false;
+  });
+}
+
+/**
+ * Computes all soundtrack candidates for a given EPUB editionId from installed packages and associations.
+ */
+export function computeSoundtrackCandidates(
+  editionId: string,
+  packages: StoredPackagesMap,
+  associations: StoredAssociationsMap,
+): {
+  activeAssociation: LocalAssociation | null;
+  candidates: SoundtrackCandidate[];
+} {
+  const activeAssoc = associations[editionId];
+  const activeAssociation = activeAssoc && activeAssoc.selected ? activeAssoc : null;
+
+  const candidates: SoundtrackCandidate[] = [];
+
+  for (const pkg of Object.values(packages)) {
+    const isMatch = isEditionCompatibleWithManifest(pkg.manifest, editionId);
+    const revisionAssocKey = `${editionId}:${pkg.packageId}:${pkg.manifestHash}`;
+    const revisionAssoc = associations[revisionAssocKey];
+
+    const isSelected =
+      Boolean(activeAssociation) &&
+      activeAssociation?.packageId === pkg.packageId &&
+      activeAssociation?.manifestHash === pkg.manifestHash;
+
+    const isAssociated = Boolean(revisionAssoc || isSelected);
+    const trustState: 'verified' | 'unverified' =
+      revisionAssoc?.trustState ?? (isMatch ? 'verified' : 'unverified');
+
+    candidates.push({
+      package: pkg,
+      trustState,
+      isSelected,
+      isAssociated,
+    });
+  }
+
+  candidates.sort((a, b) => {
+    if (a.isSelected && !b.isSelected) return -1;
+    if (!a.isSelected && b.isSelected) return 1;
+    if (a.trustState === 'verified' && b.trustState === 'unverified') return -1;
+    if (a.trustState === 'unverified' && b.trustState === 'verified') return 1;
+    return a.package.manifest.title.localeCompare(b.package.manifest.title);
+  });
+
+  return { activeAssociation, candidates };
+}
+
+/**
+ * Associates an installed package revision to an EPUB edition.
+ * Enforces one active soundtrack per edition. Requires consent for unverified edition mismatches.
+ */
+export async function associateSoundtrackToEdition(
+  fs: FileSystem,
+  baseDir: BaseDir,
+  editionId: string,
+  packageId: string,
+  manifestHash: string,
+  options?: { consentGiven?: boolean },
+): Promise<{ success: boolean; association?: LocalAssociation; error?: string }> {
+  const initialPackages = await loadInstalledPackages(fs, baseDir);
+  const initialAssociations = await loadLocalAssociations(fs, baseDir);
+
+  const pkgKey = `${packageId}:${manifestHash}`;
+  const pkg = initialPackages[pkgKey];
+  if (!pkg) {
+    return { success: false, error: `Package revision ${pkgKey} not found` };
+  }
+
+  const isMatch = isEditionCompatibleWithManifest(pkg.manifest, editionId);
+  let trustState: 'verified' | 'unverified' = 'verified';
+
+  if (!isMatch) {
+    if (!options?.consentGiven) {
+      return {
+        success: false,
+        error: `Fresh prominent consent required to attach unverified soundtrack revision ${pkgKey} to edition ${editionId}`,
+      };
+    }
+    trustState = 'unverified';
+  }
+
+  const revisionAssocKey = `${editionId}:${packageId}:${manifestHash}`;
+  const association: LocalAssociation = {
+    editionId,
+    packageId,
+    manifestHash,
+    selected: true,
+    trustState,
+  };
+
+  const updatedAssociations: Record<string, LocalAssociation> = { ...initialAssociations };
+
+  // Enforce one active soundtrack per edition: unselect existing revision associations for this editionId
+  for (const [key, assoc] of Object.entries(updatedAssociations)) {
+    if (assoc.editionId === editionId || key.startsWith(`${editionId}:`)) {
+      updatedAssociations[key] = {
+        ...assoc,
+        selected: false,
+      };
+    }
+  }
+
+  updatedAssociations[revisionAssocKey] = association;
+  updatedAssociations[editionId] = association;
+
+  await saveLocalAssociations(fs, baseDir, updatedAssociations);
+
+  return {
+    success: true,
+    association,
+  };
+}
+
+/**
+ * Detaches the currently selected active soundtrack for an EPUB edition without deleting the installed package.
+ */
+export async function detachSoundtrackFromEdition(
+  fs: FileSystem,
+  baseDir: BaseDir,
+  editionId: string,
+): Promise<{ success: boolean }> {
+  const initialAssociations = await loadLocalAssociations(fs, baseDir);
+  const updatedAssociations: Record<string, LocalAssociation> = { ...initialAssociations };
+
+  for (const [key, assoc] of Object.entries(updatedAssociations)) {
+    if (assoc.editionId === editionId || key === editionId || key.startsWith(`${editionId}:`)) {
+      updatedAssociations[key] = {
+        ...assoc,
+        selected: false,
+      };
+    }
+  }
+
+  await saveLocalAssociations(fs, baseDir, updatedAssociations);
+  return { success: true };
+}
+
+/**
+ * Finds all LocalAssociation entries referencing a specific package revision.
+ */
+export function getAffectedAssociationsForPackage(
+  packageId: string,
+  manifestHash: string,
+  associations: StoredAssociationsMap,
+): { editionId: string; association: LocalAssociation }[] {
+  const affected: { editionId: string; association: LocalAssociation }[] = [];
+  const seenEditions = new Set<string>();
+
+  for (const assoc of Object.values(associations)) {
+    if (
+      assoc &&
+      assoc.packageId === packageId &&
+      assoc.manifestHash === manifestHash &&
+      !seenEditions.has(assoc.editionId)
+    ) {
+      seenEditions.add(assoc.editionId);
+      affected.push({ editionId: assoc.editionId, association: assoc });
+    }
+  }
+
+  return affected;
+}
+
+/**
+ * Safely removes an installed soundtrack package from app storage and package persistence.
+ * Detaches only that package from affected local associations and NEVER switches automatically.
+ */
+export async function removeInstalledPackage(
+  fs: FileSystem,
+  baseDir: BaseDir,
+  packageId: string,
+  manifestHash: string,
+): Promise<{ success: boolean; affectedEditionIds: string[] }> {
+  const initialPackages = await loadInstalledPackages(fs, baseDir);
+  const initialAssociations = await loadLocalAssociations(fs, baseDir);
+
+  const pkgKey = `${packageId}:${manifestHash}`;
+  const pkg = initialPackages[pkgKey];
+
+  const affectedAssociations = getAffectedAssociationsForPackage(
+    packageId,
+    manifestHash,
+    initialAssociations,
+  );
+  const affectedEditionIds = affectedAssociations.map((a) => a.editionId);
+
+  // 1. Remove from packages map
+  const updatedPackages = { ...initialPackages };
+  delete updatedPackages[pkgKey];
+  await saveInstalledPackages(fs, baseDir, updatedPackages);
+
+  // 2. Delete asset audio files from storage
+  if (pkg) {
+    for (const asset of pkg.manifest.assets) {
+      const assetPath = `soundtracks/${packageId}/${manifestHash}/${asset.id}.mp3`;
+      try {
+        if ('deleteFile' in fs && typeof fs.deleteFile === 'function') {
+          await fs.deleteFile(assetPath, baseDir);
+        } else if (
+          'remove' in fs &&
+          typeof (fs as unknown as { remove: unknown }).remove === 'function'
+        ) {
+          await (fs as unknown as { remove: (p: string, b: BaseDir) => Promise<void> }).remove(
+            assetPath,
+            baseDir,
+          );
+        }
+      } catch (_) {}
+    }
+  }
+
+  // 3. Remove/detach from associations map (NEVER auto-switches!)
+  const updatedAssociations: Record<string, LocalAssociation> = { ...initialAssociations };
+  for (const [key, assoc] of Object.entries(updatedAssociations)) {
+    if (assoc.packageId === packageId && assoc.manifestHash === manifestHash) {
+      delete updatedAssociations[key];
+    }
+  }
+
+  for (const editionId of affectedEditionIds) {
+    const primaryAssoc = updatedAssociations[editionId];
+    if (
+      primaryAssoc &&
+      primaryAssoc.packageId === packageId &&
+      primaryAssoc.manifestHash === manifestHash
+    ) {
+      delete updatedAssociations[editionId];
+    }
+  }
+
+  await saveLocalAssociations(fs, baseDir, updatedAssociations);
+
+  return {
+    success: true,
+    affectedEditionIds,
+  };
+}
 
 /**
  * Creates a minimal valid, decodable MPEG-1 Layer III (MP3) audio byte sequence (~2.6 seconds at 44.1 kHz).
@@ -35,10 +305,11 @@ export function createMinimalValidMp3Bytes(): Uint8Array {
 
 /**
  * Atomically validates a .bookscore package archive, persists its asset files to app storage,
- * updates soundtrack_packages.json with the InstalledPackage, and creates/saves a LocalAssociation
+ * updates soundtrack_packages.json with the InstalledPackage, and conditionally creates/saves a LocalAssociation
  * attaching the exact Package Revision to the EPUB edition.
  *
- * If any step fails, performs a full transaction rollback (removing written asset files and restoring initial packages & associations metadata).
+ * Fingerprint match offers a Verified candidate but never auto-attaches unless autoAttach is explicitly requested.
+ * Mismatch requires explicit consent.
  */
 export async function importAndAssociateBookScorePackage(
   fs: FileSystem,
@@ -46,6 +317,7 @@ export async function importAndAssociateBookScorePackage(
   archiveBytes: Uint8Array,
   editionId: string,
   audioDecoder?: AudioDecoderFn,
+  options?: ImportPackageOptions,
 ): Promise<ImportAndAssociateResult> {
   const valRes = await validateBookScorePackageArchive(archiveBytes, audioDecoder);
   if (!valRes.valid || !valRes.package || !valRes.assetFiles) {
@@ -66,7 +338,6 @@ export async function importAndAssociateBookScorePackage(
   try {
     const existingPackage = initialPackages[pkgKey];
     const isAlreadyInstalled = Boolean(existingPackage);
-    // Retain immutable stored package record if already installed
     const pkgToUse = existingPackage ?? pkg;
 
     // 1. Persist extracted asset audio files to app storage (namespaced by manifestHash)
@@ -82,7 +353,6 @@ export async function importAndAssociateBookScorePackage(
           pkg.manifestHash,
         );
         if (existingData) {
-          // Asset already exists on disk for this revision, skip re-writing
           continue;
         }
       }
@@ -104,33 +374,45 @@ export async function importAndAssociateBookScorePackage(
       await saveInstalledPackages(fs, baseDir, updatedPackages);
     }
 
-    // 3. Create & save LocalAssociation attaching Package Revision to EPUB edition.
-    // Retain existing revision associations unchanged so multiple revisions coexist without mutating prior state.
-    const revisionAssocKey = `${editionId}:${pkg.packageId}:${pkg.manifestHash}`;
-    const existingRevisionAssoc = initialAssociations[revisionAssocKey];
-    const existingEditionAssoc = initialAssociations[editionId];
-    const matchingAssoc =
-      (existingEditionAssoc &&
-      existingEditionAssoc.packageId === pkg.packageId &&
-      existingEditionAssoc.manifestHash === pkg.manifestHash
-        ? existingEditionAssoc
-        : undefined) ?? existingRevisionAssoc;
+    // 3. Evaluate autoAttach condition
+    const isMatch = isEditionCompatibleWithManifest(pkg.manifest, editionId);
+    const shouldAttach = options?.autoAttach ?? true; // default true for legacy caller compatibility, false when specified
 
-    const targetSelected = matchingAssoc ? matchingAssoc.selected : true;
+    let association: LocalAssociation | undefined;
 
-    const association: LocalAssociation = {
-      editionId,
-      packageId: pkg.packageId,
-      manifestHash: pkg.manifestHash,
-      selected: targetSelected,
-    };
+    if (shouldAttach) {
+      if (!isMatch && !options?.consentGiven) {
+        // Do not attach unverified mismatch without explicit consent
+      } else {
+        const revisionAssocKey = `${editionId}:${pkg.packageId}:${pkg.manifestHash}`;
+        const existingRevisionAssoc = initialAssociations[revisionAssocKey];
+        const existingEditionAssoc = initialAssociations[editionId];
+        const matchingAssoc =
+          (existingEditionAssoc &&
+          existingEditionAssoc.packageId === pkg.packageId &&
+          existingEditionAssoc.manifestHash === pkg.manifestHash
+            ? existingEditionAssoc
+            : undefined) ?? existingRevisionAssoc;
 
-    const updatedAssociations = {
-      ...initialAssociations,
-      [revisionAssocKey]: association,
-      [editionId]: association,
-    };
-    await saveLocalAssociations(fs, baseDir, updatedAssociations);
+        const targetSelected = matchingAssoc ? matchingAssoc.selected : true;
+        const trustState: 'verified' | 'unverified' = isMatch ? 'verified' : 'unverified';
+
+        association = {
+          editionId,
+          packageId: pkg.packageId,
+          manifestHash: pkg.manifestHash,
+          selected: targetSelected,
+          trustState,
+        };
+
+        const updatedAssociations = {
+          ...initialAssociations,
+          [revisionAssocKey]: association,
+          [editionId]: association,
+        };
+        await saveLocalAssociations(fs, baseDir, updatedAssociations);
+      }
+    }
 
     return {
       success: true,
@@ -177,6 +459,7 @@ export async function createDevelopmentFixturePackageBytes(
   assetAudioBytes?: Uint8Array,
   packageId = 'pkg-dev-fixture',
   title = 'Development EPUB Soundtrack',
+  editionId = 'dev-edition-digest',
 ): Promise<Uint8Array> {
   const { ZipWriter, Uint8ArrayWriter, Uint8ArrayReader, TextReader } = await import(
     '@zip.js/zip.js'
@@ -193,7 +476,7 @@ export async function createDevelopmentFixturePackageBytes(
     editionCompatibility: [
       {
         algorithm: 'readest-partial-md5-v1' as const,
-        digest: 'dev-edition-digest',
+        digest: editionId,
         epubByteLength: 1048576,
       },
     ],
@@ -255,6 +538,7 @@ export async function ensureBookScoreFixtureInstalled(
       mp3Bytes,
       'pkg-m1-fixture',
       'Milestone 1 EPUB Soundtrack',
+      editionId,
     );
     // Run production import using defaultAudioDecoder
     const importRes = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);

@@ -31,6 +31,7 @@ import { saveSysSettings } from '@/helpers/settings';
 import BookCover from '@/components/BookCover';
 import Dropdown from '../Dropdown';
 import MenuItem from '../MenuItem';
+import { BookDetailSoundtrack } from './BookDetailSoundtrack';
 
 interface BookDetailViewProps {
   book: Book;
@@ -384,6 +385,7 @@ const BookDetailView: React.FC<BookDetailViewProps> = ({
             </div>
           )}
         </div>
+        <BookDetailSoundtrack book={book} />
       </div>
     </div>
   );
