@@ -34,13 +34,9 @@ import Dialog from '../Dialog';
 
 interface BookDetailSoundtrackProps {
   book: Book;
-  onAssociationChanged?: () => void;
 }
 
-export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({
-  book,
-  onAssociationChanged,
-}) => {
+export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({ book }) => {
   const _ = useTranslation();
   const { appService } = useEnv();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -116,7 +112,6 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({
 
     if (res.success) {
       await refreshData();
-      if (onAssociationChanged) onAssociationChanged();
     } else if (res.error) {
       setErrorMsg(res.error);
     }
@@ -139,7 +134,6 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({
 
     if (res.success) {
       await refreshData();
-      if (onAssociationChanged) onAssociationChanged();
     } else if (res.error) {
       setErrorMsg(res.error);
     }
@@ -161,7 +155,6 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({
 
     if (res.success) {
       await refreshData();
-      if (onAssociationChanged) onAssociationChanged();
     } else if (res.error) {
       setErrorMsg(res.error);
     }
@@ -174,7 +167,6 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({
     const res = await detachSoundtrackFromEdition(fs, 'Data', editionId);
     if (res.success) {
       await refreshData();
-      if (onAssociationChanged) onAssociationChanged();
     }
   };
 
@@ -188,7 +180,6 @@ export const BookDetailSoundtrack: React.FC<BookDetailSoundtrackProps> = ({
     const res = await removeInstalledPackage(fs, 'Data', pkg.packageId, pkg.manifestHash);
     if (res.success) {
       await refreshData();
-      if (onAssociationChanged) onAssociationChanged();
     }
   };
 

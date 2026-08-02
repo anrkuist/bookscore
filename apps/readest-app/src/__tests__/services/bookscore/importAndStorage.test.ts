@@ -125,8 +125,10 @@ describe('BookScore Import and Binary Storage Integration', () => {
     expect(loadedBytes).toEqual(rawBinaryBytes);
   });
 
-  it('atomically imports, validates, persists asset files, saves package and association, and loads into soundtrack store', async () => {
-    const { createMinimalValidMp3Bytes } = await import('@/services/bookscore/importService');
+  it('atomically imports, validates, persists asset files, saves package without auto-attaching, and loads into soundtrack store when attached', async () => {
+    const { createMinimalValidMp3Bytes, associateSoundtrackToEdition } = await import(
+      '@/services/bookscore/importService'
+    );
     const editionId = 'edition-epub-prod-123';
     const assetAudioBytes = createMinimalValidMp3Bytes();
     const zipBytes = await createDevelopmentFixturePackageBytes(
@@ -136,21 +138,33 @@ describe('BookScore Import and Binary Storage Integration', () => {
       editionId,
     );
 
+    // Default import without autoAttach options leaves association undefined
     const importRes = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
 
     expect(importRes.success).toBe(true);
     expect(importRes.package).toBeDefined();
-    expect(importRes.association).toBeDefined();
+    expect(importRes.association).toBeUndefined();
 
-    // Verify package and association are saved to disk storage
+    // Verify package is saved to disk storage, but no association is created yet
     const loadedPackages = await loadInstalledPackages(fs, baseDir);
     const loadedAssociations = await loadLocalAssociations(fs, baseDir);
 
-    expect(loadedAssociations[editionId]).toBeDefined();
-    expect(loadedAssociations[editionId]?.packageId).toBe('pkg-prod-seam');
+    expect(loadedAssociations[editionId]).toBeUndefined();
 
     const pkgKey = `${importRes.package!.packageId}:${importRes.package!.manifestHash}`;
     expect(loadedPackages[pkgKey]).toBeDefined();
+
+    // Explicitly associate package to edition
+    const assocRes = await associateSoundtrackToEdition(
+      fs,
+      baseDir,
+      editionId,
+      importRes.package!.packageId,
+      importRes.package!.manifestHash,
+    );
+    expect(assocRes.success).toBe(true);
+
+    const updatedAssociations = await loadLocalAssociations(fs, baseDir);
 
     // Verify reader store can load soundtrack for book
     const store = useSoundtrackStore.getState();
@@ -158,7 +172,7 @@ describe('BookScore Import and Binary Storage Integration', () => {
     store.loadSoundtrackForBook(
       editionId,
       loadedPackages,
-      loadedAssociations,
+      updatedAssociations,
       'epubcfi(/6/2!/4/2:0)',
     );
 
@@ -167,7 +181,7 @@ describe('BookScore Import and Binary Storage Integration', () => {
     expect(useSoundtrackStore.getState().playbackStatus).toBe('paused');
   });
 
-  it('runs ensureBookScoreFixtureInstalled production seam when opening edition with no prior association', async () => {
+  it('runs ensureBookScoreFixtureInstalled production seam when opening edition without auto-attaching an active soundtrack', async () => {
     const editionId = 'edition-desktop-open-456';
     const { packages, associations } = await ensureBookScoreFixtureInstalled(
       fs,
@@ -175,9 +189,8 @@ describe('BookScore Import and Binary Storage Integration', () => {
       editionId,
     );
 
-    expect(associations[editionId]).toBeDefined();
-    expect(associations[editionId]?.packageId).toBe('pkg-m1-fixture');
-    expect(Object.keys(packages).length).toBeGreaterThan(0);
+    expect(associations[editionId]).toBeUndefined();
+    expect(Object.keys(packages).some((k) => k.startsWith('pkg-m1-fixture:'))).toBe(true);
   });
 
   it('rolls back asset file writes on persistence failure to guarantee atomic package import', async () => {
@@ -339,6 +352,7 @@ describe('BookScore Import and Binary Storage Integration', () => {
       zipBytes,
       editionId,
       mockDecoder,
+      { autoAttach: true },
     );
 
     expect(res.success).toBe(false);
@@ -362,7 +376,16 @@ describe('BookScore Import and Binary Storage Integration', () => {
     );
 
     // First import
-    const res1 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
+    const res1 = await importAndAssociateBookScorePackage(
+      fs,
+      baseDir,
+      zipBytes,
+      editionId,
+      undefined,
+      {
+        autoAttach: true,
+      },
+    );
     expect(res1.success).toBe(true);
     const originalInstalledAt = res1.package!.installedAt;
 
@@ -373,7 +396,16 @@ describe('BookScore Import and Binary Storage Integration', () => {
 
     // Re-import identical package revision after delay
     await new Promise((r) => setTimeout(r, 10));
-    const res2 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
+    const res2 = await importAndAssociateBookScorePackage(
+      fs,
+      baseDir,
+      zipBytes,
+      editionId,
+      undefined,
+      {
+        autoAttach: true,
+      },
+    );
     expect(res2.success).toBe(true);
 
     // InstalledPackage record is retained unchanged (installedAt not mutated)
@@ -396,7 +428,16 @@ describe('BookScore Import and Binary Storage Integration', () => {
       'Coexistence Soundtrack Rev 1',
       editionId,
     );
-    const res1 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytesV1, editionId);
+    const res1 = await importAndAssociateBookScorePackage(
+      fs,
+      baseDir,
+      zipBytesV1,
+      editionId,
+      undefined,
+      {
+        autoAttach: true,
+      },
+    );
     expect(res1.success).toBe(true);
     const pkg1Key = `${res1.package!.packageId}:${res1.package!.manifestHash}`;
 
@@ -407,8 +448,18 @@ describe('BookScore Import and Binary Storage Integration', () => {
       'Coexistence Soundtrack Rev 2 Updated',
       editionId,
     );
-    const res2 = await importAndAssociateBookScorePackage(fs, baseDir, zipBytesV2, editionId);
+    const res2 = await importAndAssociateBookScorePackage(
+      fs,
+      baseDir,
+      zipBytesV2,
+      editionId,
+      undefined,
+      {
+        autoAttach: true,
+      },
+    );
     expect(res2.success).toBe(true);
+
     const pkg2Key = `${res2.package!.packageId}:${res2.package!.manifestHash}`;
 
     expect(pkg1Key).not.toBe(pkg2Key);
@@ -424,7 +475,7 @@ describe('BookScore Import and Binary Storage Integration', () => {
     const rev2AssocKey = `${editionId}:${res2.package!.packageId}:${res2.package!.manifestHash}`;
 
     expect(assocMap[rev1AssocKey]).toBeDefined();
-    expect(assocMap[rev1AssocKey]?.selected).toBe(true);
+    expect(assocMap[rev1AssocKey]?.selected).toBe(false);
     expect(assocMap[rev2AssocKey]).toBeDefined();
     expect(assocMap[rev2AssocKey]?.selected).toBe(true);
     expect(assocMap[editionId]?.manifestHash).toBe(res2.package!.manifestHash);

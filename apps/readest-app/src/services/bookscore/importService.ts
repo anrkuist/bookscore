@@ -72,7 +72,6 @@ export function computeSoundtrackCandidates(
       activeAssociation?.packageId === pkg.packageId &&
       activeAssociation?.manifestHash === pkg.manifestHash;
 
-    const isAssociated = Boolean(revisionAssoc || isSelected);
     const trustState: 'verified' | 'unverified' =
       revisionAssoc?.trustState ?? (isMatch ? 'verified' : 'unverified');
 
@@ -80,7 +79,6 @@ export function computeSoundtrackCandidates(
       package: pkg,
       trustState,
       isSelected,
-      isAssociated,
     });
   }
 
@@ -374,9 +372,9 @@ export async function importAndAssociateBookScorePackage(
       await saveInstalledPackages(fs, baseDir, updatedPackages);
     }
 
-    // 3. Evaluate autoAttach condition
+    // 3. Evaluate autoAttach condition (never auto-attaches unless autoAttach: true is explicitly requested)
     const isMatch = isEditionCompatibleWithManifest(pkg.manifest, editionId);
-    const shouldAttach = options?.autoAttach ?? true; // default true for legacy caller compatibility, false when specified
+    const shouldAttach = options?.autoAttach ?? false;
 
     let association: LocalAssociation | undefined;
 
@@ -405,11 +403,20 @@ export async function importAndAssociateBookScorePackage(
           trustState,
         };
 
-        const updatedAssociations = {
-          ...initialAssociations,
-          [revisionAssocKey]: association,
-          [editionId]: association,
-        };
+        const updatedAssociations: Record<string, LocalAssociation> = { ...initialAssociations };
+        if (targetSelected) {
+          for (const [key, assoc] of Object.entries(updatedAssociations)) {
+            if (assoc.editionId === editionId || key.startsWith(`${editionId}:`)) {
+              updatedAssociations[key] = {
+                ...assoc,
+                selected: false,
+              };
+            }
+          }
+        }
+
+        updatedAssociations[revisionAssocKey] = association;
+        updatedAssociations[editionId] = association;
         await saveLocalAssociations(fs, baseDir, updatedAssociations);
       }
     }
@@ -532,7 +539,8 @@ export async function ensureBookScoreFixtureInstalled(
   let packages = await loadInstalledPackages(fs, baseDir);
   let associations = await loadLocalAssociations(fs, baseDir);
 
-  if (!associations[editionId]) {
+  const fixtureInstalled = Object.keys(packages).some((k) => k.startsWith('pkg-m1-fixture:'));
+  if (!fixtureInstalled) {
     const mp3Bytes = createMinimalValidMp3Bytes();
     const zipBytes = await createDevelopmentFixturePackageBytes(
       mp3Bytes,
@@ -540,8 +548,15 @@ export async function ensureBookScoreFixtureInstalled(
       'Milestone 1 EPUB Soundtrack',
       editionId,
     );
-    // Run production import using defaultAudioDecoder
-    const importRes = await importAndAssociateBookScorePackage(fs, baseDir, zipBytes, editionId);
+    // Install fixture package as un-attached candidate without auto-attaching
+    const importRes = await importAndAssociateBookScorePackage(
+      fs,
+      baseDir,
+      zipBytes,
+      editionId,
+      undefined,
+      { autoAttach: false },
+    );
     if (importRes.success) {
       packages = await loadInstalledPackages(fs, baseDir);
       associations = await loadLocalAssociations(fs, baseDir);

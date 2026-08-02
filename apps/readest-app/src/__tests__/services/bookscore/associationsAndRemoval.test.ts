@@ -194,6 +194,13 @@ describe('BookScore Associations, Trust, and Safe Removal', () => {
     expect(activeAssociation?.packageId).toBe('pkg-2');
     const selectedCount = candidates.filter((c) => c.isSelected).length;
     expect(selectedCount).toBe(1);
+
+    // Inspect every persisted record in soundtrack_associations.json for this edition
+    const selectedRevisionKeys = Object.keys(associations).filter(
+      (key) => key.startsWith('dev-edition-digest:') && associations[key]?.selected,
+    );
+    expect(selectedRevisionKeys.length).toBe(1);
+    expect(selectedRevisionKeys[0]).toContain('pkg-2');
   });
 
   it('allows detaching the active soundtrack from an edition', async () => {
@@ -290,5 +297,52 @@ describe('BookScore Associations, Trust, and Safe Removal', () => {
       associationsAfter,
     );
     expect(activeB?.packageId).toBe('pkg-2');
+  });
+
+  it('guarantees local-only persistence and excludes association/trust data from package export/backup structures', async () => {
+    const pkgBytes = await createDevelopmentFixturePackageBytes();
+    const mockAudioDecoder = async () => ({
+      durationSec: 2.6,
+      sampleRate: 44100,
+      numberOfChannels: 2,
+    });
+
+    // Create a verified local association and an unverified local association
+    const resVerified = await importAndAssociateBookScorePackage(
+      fs,
+      'Data',
+      pkgBytes,
+      'dev-edition-digest',
+      mockAudioDecoder,
+      { autoAttach: true },
+    );
+    expect(resVerified.success).toBe(true);
+
+    const resUnverified = await associateSoundtrackToEdition(
+      fs,
+      'Data',
+      'unverified-edition',
+      resVerified.package!.packageId,
+      resVerified.package!.manifestHash,
+      { consentGiven: true },
+    );
+    expect(resUnverified.success).toBe(true);
+
+    const storedPackages = await loadInstalledPackages(fs, 'Data');
+    const pkgEntry =
+      storedPackages[`${resVerified.package!.packageId}:${resVerified.package!.manifestHash}`];
+    expect(pkgEntry).toBeDefined();
+
+    // Assert portable package manifest schema contains NO local association, selection, or trust fields
+    const manifestJson = JSON.stringify(pkgEntry!.manifest);
+    expect(manifestJson).not.toContain('trustState');
+    expect(manifestJson).not.toContain('selected');
+    expect(manifestJson).not.toContain('soundtrack_associations');
+    expect(manifestJson).not.toContain('unverified-edition');
+
+    // Assert InstalledPackage stored record contains NO local selection or trust fields
+    const pkgRecordJson = JSON.stringify(pkgEntry);
+    expect(pkgRecordJson).not.toContain('trustState');
+    expect(pkgRecordJson).not.toContain('selected');
   });
 });
