@@ -1,5 +1,5 @@
 import { BaseDir, FileSystem } from '@/types/system';
-import { sha256Hex } from './packageValidation';
+import { AudioDecoderFn, defaultAudioDecoder, sha256Hex } from './packageValidation';
 import { loadSoundtrackAssetFile } from './assetStorage';
 import { loadInstalledPackages } from './persistence';
 import {
@@ -117,10 +117,6 @@ export function removeCue(copy: EditableCopy, cueId: string): EditableCopy {
   };
 }
 
-/**
- * Reorders a cue: moves it to the position of `targetCueId` (shifting others down).
- * The resulting list is then re-sorted by startCfi so CFI order is always canonical.
- */
 export function reorderCue(copy: EditableCopy, cueId: string, targetIndex: number): EditableCopy {
   const cues = [...copy.manifest.cues];
   const fromIdx = cues.findIndex((c) => c.id === cueId);
@@ -129,11 +125,9 @@ export function reorderCue(copy: EditableCopy, cueId: string, targetIndex: numbe
   if (!moved) return copy;
   const clampedTarget = Math.max(0, Math.min(targetIndex, cues.length));
   cues.splice(clampedTarget, 0, moved);
-  // Re-sort by startCfi to maintain canonical order
-  const sorted = cues.sort((a, b) => compareCfiSimple(a.startCfi, b.startCfi));
   return {
     ...copy,
-    manifest: { ...copy.manifest, cues: sorted },
+    manifest: { ...copy.manifest, cues },
     modifiedAt: Date.now(),
   };
 }
@@ -215,7 +209,10 @@ export function resolvePreviewAsset(copy: EditableCopy, cue: SoundtrackCue): Pre
  * Issues are categorised as 'error' (blocks export) or 'warning' (informational).
  * This function NEVER blocks reading — only export should check `result.valid`.
  */
-export function validateEditableCopy(copy: EditableCopy): EditableCopyValidationResult {
+export async function validateEditableCopy(
+  copy: EditableCopy,
+  audioDecoder?: AudioDecoderFn,
+): Promise<EditableCopyValidationResult> {
   const issues: CueValidationIssue[] = [];
 
   // 1. Must have at least one cue
@@ -348,7 +345,53 @@ export function validateEditableCopy(copy: EditableCopy): EditableCopyValidation
     }
   }
 
-  // 5. Warn on duplicate startCfi values
+  // 5. Decode & duration validation for embedded asset bytes
+  const decoder = audioDecoder || defaultAudioDecoder;
+  for (const asset of copy.manifest.assets) {
+    const bytes = copy.assetBytes[asset.id];
+    if (!bytes || bytes.byteLength === 0) continue;
+
+    try {
+      const decoded = await decoder(bytes);
+      if (!decoded || typeof decoded.durationSec !== 'number' || decoded.durationSec <= 0) {
+        issues.push({
+          severity: 'error',
+          assetId: asset.id,
+          message: `Asset "${asset.id}" audio decoding failed: invalid decoded duration.`,
+        });
+        continue;
+      }
+
+      if (Math.abs(decoded.durationSec - asset.durationSec) > 1.0) {
+        issues.push({
+          severity: 'error',
+          assetId: asset.id,
+          message: `Asset "${asset.id}" decoded duration (${decoded.durationSec.toFixed(1)}s) does not match declared duration (${asset.durationSec}s).`,
+        });
+      }
+
+      for (const cue of copy.manifest.cues) {
+        if (cue.type === 'audio' && cue.assetId === asset.id) {
+          if (cue.loopEndSec > decoded.durationSec) {
+            issues.push({
+              severity: 'error',
+              cueId: cue.id,
+              assetId: asset.id,
+              message: `Audio cue "${cue.id}" loopEndSec (${cue.loopEndSec}s) exceeds decoded asset duration (${decoded.durationSec.toFixed(1)}s).`,
+            });
+          }
+        }
+      }
+    } catch (decodeErr) {
+      issues.push({
+        severity: 'error',
+        assetId: asset.id,
+        message: `Asset "${asset.id}" audio decoding failed: ${decodeErr}`,
+      });
+    }
+  }
+
+  // 6. Warn on duplicate startCfi values
   const cfiSeen = new Set<string>();
   for (const cue of copy.manifest.cues) {
     if (cfiSeen.has(cue.startCfi)) {
@@ -382,8 +425,11 @@ export type ExportEditableCopyResult =
  * Returns an error without writing if validation finds blocking issues.
  * Local-only fields (editionId, copyId, source references) do NOT travel.
  */
-export async function exportEditableCopy(copy: EditableCopy): Promise<ExportEditableCopyResult> {
-  const validation = validateEditableCopy(copy);
+export async function exportEditableCopy(
+  copy: EditableCopy,
+  audioDecoder?: AudioDecoderFn,
+): Promise<ExportEditableCopyResult> {
+  const validation = await validateEditableCopy(copy, audioDecoder);
   if (!validation.valid) {
     return {
       success: false,

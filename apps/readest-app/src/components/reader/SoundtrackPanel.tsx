@@ -3,6 +3,8 @@
 import clsx from 'clsx';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  MdArrowDownward,
+  MdArrowUpward,
   MdCheckCircle,
   MdClose,
   MdDelete,
@@ -40,6 +42,7 @@ import {
   makeEditableCopy,
   removeAssetFromCopy,
   removeCue,
+  reorderCue,
   updateCopyTitle,
   validateEditableCopy,
 } from '@/services/bookscore/authoringService';
@@ -295,16 +298,22 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
         const assetId = `asset-${Date.now()}`;
         const exportPath = `audio/${assetId}.mp3`;
 
-        let durationSec = 10;
+        const { defaultAudioDecoder, sha256Hex } = await import(
+          '@/services/bookscore/packageValidation'
+        );
+        let durationSec: number;
         try {
-          const { defaultAudioDecoder } = await import('@/services/bookscore/packageValidation');
           const decoded = await defaultAudioDecoder(bytes);
-          if (decoded?.durationSec && decoded.durationSec > 0) {
-            durationSec = Math.round(decoded.durationSec * 10) / 10;
+          if (!decoded || typeof decoded.durationSec !== 'number' || decoded.durationSec <= 0) {
+            setErrorMsg(_('Selected file is not a valid MP3 audio file.'));
+            return;
           }
-        } catch (_) {}
+          durationSec = Math.round(decoded.durationSec * 10) / 10;
+        } catch (decodeErr) {
+          setErrorMsg(`${_('Failed to decode MP3 audio file:')} ${decodeErr}`);
+          return;
+        }
 
-        const { sha256Hex } = await import('@/services/bookscore/packageValidation');
         const hash = await sha256Hex(bytes);
 
         const newAsset: SoundtrackAsset = {
@@ -324,7 +333,7 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
         }
       }
     },
-    [editableCopy, updateEditableCopy],
+    [editableCopy, updateEditableCopy, _],
   );
 
   const handleRemoveAsset = useCallback(
@@ -383,6 +392,23 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
     [editableCopy, editingCue, updateEditableCopy],
   );
 
+  const handleReorderCue = useCallback(
+    (cueId: string, direction: 'up' | 'down') => {
+      if (!editableCopy) return;
+      const cues = editableCopy.manifest.cues;
+      const currentIndex = cues.findIndex((c) => c.id === cueId);
+      if (currentIndex === -1) return;
+
+      const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+      if (targetIndex < 0 || targetIndex >= cues.length) return;
+
+      const updated = reorderCue(editableCopy, cueId, targetIndex);
+      updateEditableCopy(updated);
+      setValidationIssues([]);
+    },
+    [editableCopy, updateEditableCopy],
+  );
+
   const handleEditCueSave = useCallback(
     (cue: SoundtrackCue) => {
       if (!editableCopy) return;
@@ -400,9 +426,9 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
     updateEditableCopy(updated);
   }, [editableCopy, authoringTitle, updateEditableCopy]);
 
-  const handleValidate = useCallback(() => {
+  const handleValidate = useCallback(async () => {
     if (!editableCopy) return;
-    const result = validateEditableCopy(editableCopy);
+    const result = await validateEditableCopy(editableCopy);
     setValidationIssues(result.issues);
     setExportError(null);
   }, [editableCopy]);
@@ -998,6 +1024,31 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
                             )}
                           </button>
                         )}
+                        <button
+                          type='button'
+                          id={`move-up-cue-${cue.id}`}
+                          className='btn btn-xs btn-ghost p-0.5'
+                          onClick={() => handleReorderCue(cue.id, 'up')}
+                          disabled={
+                            editableCopy.manifest.cues.findIndex((c) => c.id === cue.id) === 0
+                          }
+                          aria-label={_('Move cue up')}
+                        >
+                          <MdArrowUpward className='h-3.5 w-3.5' />
+                        </button>
+                        <button
+                          type='button'
+                          id={`move-down-cue-${cue.id}`}
+                          className='btn btn-xs btn-ghost p-0.5'
+                          onClick={() => handleReorderCue(cue.id, 'down')}
+                          disabled={
+                            editableCopy.manifest.cues.findIndex((c) => c.id === cue.id) ===
+                            editableCopy.manifest.cues.length - 1
+                          }
+                          aria-label={_('Move cue down')}
+                        >
+                          <MdArrowDownward className='h-3.5 w-3.5' />
+                        </button>
                         <button
                           type='button'
                           id={`edit-cue-${cue.id}`}

@@ -412,4 +412,56 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     expect(addedAudioCue).toBeDefined();
     expect(addedAudioCue?.type).toBe('audio');
   });
+
+  it('supports reordering cues via Move Up and Move Down buttons in authoring mode', async () => {
+    vi.spyOn(persistenceModule, 'loadInstalledPackages').mockResolvedValue({
+      'pkg-verified-1:hash-1': samplePkg,
+    });
+    vi.spyOn(persistenceModule, 'loadLocalAssociations').mockResolvedValue({
+      'edition-123': sampleAssoc,
+    });
+
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'edition-123',
+        { 'pkg-verified-1:hash-1': samplePkg },
+        { 'edition-123': sampleAssoc },
+      );
+    useSoundtrackStore.getState().setPanelOpen(true);
+
+    const { findByLabelText, getByLabelText, getAllByLabelText } = render(
+      <SoundtrackControl isMobile={false} />,
+    );
+
+    const makeCopyBtn = await findByLabelText(/make an editable copy of this soundtrack/i);
+    fireEvent.click(makeCopyBtn);
+
+    await waitFor(() => {
+      expect(useSoundtrackStore.getState().isAuthoringMode).toBe(true);
+    });
+
+    // Add a second cue at exact same CFI to test manual reordering
+    useSoundtrackStore.getState().reportLocation({
+      seq: 2,
+      kind: 'resolved',
+      cfi: 'epubcfi(/6/2!/4/2:0)',
+    });
+    const addAudioBtn = getByLabelText(/add audio cue at current reading position/i);
+    fireEvent.click(addAudioBtn);
+
+    const copy = useSoundtrackStore.getState().editableCopy!;
+    expect(copy.manifest.cues.length).toBeGreaterThanOrEqual(2);
+
+    const targetCue = copy.manifest.cues[1]!;
+    const moveUpBtns = getAllByLabelText(/move cue up/i);
+    expect(moveUpBtns.length).toBeGreaterThanOrEqual(2);
+    fireEvent.click(moveUpBtns[1]!);
+
+    await waitFor(() => {
+      const reorderedCopy = useSoundtrackStore.getState().editableCopy!;
+      expect(reorderedCopy.manifest.cues[0]!.id).toBe(targetCue.id);
+    });
+  });
 });

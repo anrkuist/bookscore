@@ -281,12 +281,9 @@ describe('cue CRUD – order and silence cues', () => {
     let updated = addCueAtCfi(copy, extra);
     expect(updated.manifest.cues.map((c) => c.id)).toEqual(['cue-a', 'cue-z']);
 
-    // Move cue-z to index 0 — after re-sort by CFI it should return to index 1
-    // because its CFI is still after cue-a's
+    // Move cue-z to index 0 — manual reorder places cue-z at index 0
     updated = reorderCue(updated, 'cue-z', 0);
-    // After reorder + sort by CFI, cue-a must precede cue-z
-    const ids = updated.manifest.cues.map((c) => c.id);
-    expect(ids.indexOf('cue-a')).toBeLessThan(ids.indexOf('cue-z'));
+    expect(updated.manifest.cues[0]!.id).toBe('cue-z');
   });
 
   it('updateCopyTitle changes the manifest title', () => {
@@ -413,20 +410,20 @@ describe('validateEditableCopy – validation', () => {
     };
   }
 
-  it('passes validation for a well-formed copy', () => {
-    const result = validateEditableCopy(baseCopy());
+  it('passes validation for a well-formed copy', async () => {
+    const result = await validateEditableCopy(baseCopy());
     expect(result.valid).toBe(true);
     expect(result.issues).toHaveLength(0);
   });
 
-  it('reports error when there are no cues', () => {
+  it('reports error when there are no cues', async () => {
     const copy = { ...baseCopy(), manifest: { ...baseCopy().manifest, cues: [] } };
-    const result = validateEditableCopy(copy);
+    const result = await validateEditableCopy(copy);
     expect(result.valid).toBe(false);
     expect(result.issues.some((i) => i.severity === 'error')).toBe(true);
   });
 
-  it('reports error when a cue references an undeclared asset', () => {
+  it('reports error when a cue references an undeclared asset', async () => {
     const copy = baseCopy();
     const badCue: AudioCue = {
       id: 'cue-bad',
@@ -440,28 +437,28 @@ describe('validateEditableCopy – validation', () => {
       crossfadeSec: 0.5,
     };
     copy.manifest.cues.push(badCue);
-    const result = validateEditableCopy(copy);
+    const result = await validateEditableCopy(copy);
     expect(result.valid).toBe(false);
     const issue = result.issues.find((i) => i.cueId === 'cue-bad');
     expect(issue?.severity).toBe('error');
   });
 
-  it('reports error when audio cue has zero-length loop', () => {
+  it('reports error when audio cue has zero-length loop', async () => {
     const copy = baseCopy();
     (copy.manifest.cues[0] as AudioCue).loopEndSec = 0.2; // equals loopStartSec
-    const result = validateEditableCopy(copy);
+    const result = await validateEditableCopy(copy);
     expect(result.valid).toBe(false);
     expect(result.issues.some((i) => i.cueId === 'cue-ok')).toBe(true);
   });
 
-  it('reports error when volume is out of range', () => {
+  it('reports error when volume is out of range', async () => {
     const copy = baseCopy();
     (copy.manifest.cues[0] as AudioCue).volume = 1.5;
-    const result = validateEditableCopy(copy);
+    const result = await validateEditableCopy(copy);
     expect(result.valid).toBe(false);
   });
 
-  it('reports warning for orphaned declared assets (not an error – does not block export)', () => {
+  it('reports warning for orphaned declared assets (not an error – does not block export)', async () => {
     const copy = baseCopy();
     // Remove asset bytes to simulate an orphaned asset (cue still references it via assetId)
     // Instead: remove the cue ref and keep the asset declared
@@ -475,7 +472,7 @@ describe('validateEditableCopy – validation', () => {
     copy.manifest.cues.push(silenceCue);
 
     // Now asset-main is declared but not referenced by any cue → orphan warning
-    const result = validateEditableCopy(copy);
+    const result = await validateEditableCopy(copy);
     const orphanWarning = result.issues.find(
       (i) => i.severity === 'warning' && i.assetId === 'asset-main',
     );
@@ -485,7 +482,7 @@ describe('validateEditableCopy – validation', () => {
     expect(result.valid).toBe(true);
   });
 
-  it('warns on duplicate startCfi values', () => {
+  it('warns on duplicate startCfi values', async () => {
     const copy = baseCopy();
     const dup: SilenceCue = {
       id: 'dup-cue',
@@ -493,7 +490,7 @@ describe('validateEditableCopy – validation', () => {
       type: 'silence',
     };
     copy.manifest.cues.push(dup);
-    const result = validateEditableCopy(copy);
+    const result = await validateEditableCopy(copy);
     const dupeWarning = result.issues.find(
       (i) => i.severity === 'warning' && i.cueId === 'dup-cue',
     );
@@ -885,12 +882,12 @@ describe('validateEditableCopy – strict packageValidation parity', () => {
     };
   }
 
-  it('rejects when loopStartSec < startSec', () => {
+  it('rejects when loopStartSec < startSec', async () => {
     const copy = baseCopy();
     (copy.manifest.cues[0] as AudioCue).startSec = 5.0;
     (copy.manifest.cues[0] as AudioCue).loopStartSec = 2.0; // loopStartSec < startSec!
 
-    const res = validateEditableCopy(copy);
+    const res = await validateEditableCopy(copy);
     expect(res.valid).toBe(false);
     expect(
       res.issues.some((i) =>
@@ -899,34 +896,49 @@ describe('validateEditableCopy – strict packageValidation parity', () => {
     ).toBe(true);
   });
 
-  it('rejects when loopEndSec exceeds asset durationSec', () => {
+  it('rejects when loopEndSec exceeds asset durationSec', async () => {
     const copy = baseCopy();
     (copy.manifest.cues[0] as AudioCue).loopEndSec = 15.0; // asset.durationSec is 10.0!
 
-    const res = validateEditableCopy(copy);
+    const res = await validateEditableCopy(copy);
     expect(res.valid).toBe(false);
     expect(res.issues.some((i) => i.message.includes('exceeds asset duration'))).toBe(true);
   });
 
-  it('rejects when numeric parameters are NaN or Infinity', () => {
+  it('rejects when numeric parameters are NaN or Infinity', async () => {
     const copy = baseCopy();
     (copy.manifest.cues[0] as AudioCue).startSec = NaN;
 
-    const res = validateEditableCopy(copy);
+    const res = await validateEditableCopy(copy);
     expect(res.valid).toBe(false);
     expect(res.issues.some((i) => i.message.includes('startSec must be a finite number'))).toBe(
       true,
     );
   });
 
-  it('rejects when crossfadeSec is negative', () => {
+  it('rejects when crossfadeSec is negative', async () => {
     const copy = baseCopy();
     (copy.manifest.cues[0] as AudioCue).crossfadeSec = -0.5;
 
-    const res = validateEditableCopy(copy);
+    const res = await validateEditableCopy(copy);
     expect(res.valid).toBe(false);
     expect(
       res.issues.some((i) => i.message.includes('crossfadeSec must be a finite number >= 0')),
     ).toBe(true);
+  });
+
+  it('rejects export when asset audio bytes fail runtime decoding (corrupt MP3)', async () => {
+    const copy = baseCopy();
+    // Provide invalid / corrupt audio bytes
+    copy.assetBytes['asset-1'] = new Uint8Array([0x00, 0x11, 0x22, 0x33]);
+
+    const res = await validateEditableCopy(copy);
+    expect(res.valid).toBe(false);
+    expect(
+      res.issues.some((i) => i.severity === 'error' && i.message.includes('decoding failed')),
+    ).toBe(true);
+
+    const exportRes = await exportEditableCopy(copy);
+    expect(exportRes.success).toBe(false);
   });
 });
