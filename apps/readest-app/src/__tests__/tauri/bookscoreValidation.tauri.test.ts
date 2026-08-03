@@ -54,6 +54,7 @@ describe('Tauri WebView BookScore Validation', () => {
       gainNode: GainNode;
       setValueSpy: ReturnType<typeof vi.fn>;
       rampSpy: ReturnType<typeof vi.fn>;
+      disconnectSpy: ReturnType<typeof vi.fn>;
     }
 
     function createSpiedPlayer() {
@@ -89,7 +90,8 @@ describe('Tauri WebView BookScore Validation', () => {
           const g = realCtx.createGain();
           const setValueSpy = vi.spyOn(g.gain, 'setValueAtTime');
           const rampSpy = vi.spyOn(g.gain, 'linearRampToValueAtTime');
-          createdGains.push({ gainNode: g, setValueSpy, rampSpy });
+          const disconnectSpy = vi.spyOn(g, 'disconnect');
+          createdGains.push({ gainNode: g, setValueSpy, rampSpy, disconnectSpy });
           return g;
         },
         createBuffer: (channels: number, len: number, rate: number) =>
@@ -214,7 +216,7 @@ describe('Tauri WebView BookScore Validation', () => {
     });
 
     it('should transition to silence and propagate errors on silence-first decode failures', async () => {
-      const { player, realCtx, getCreatedSources } = createSpiedPlayer();
+      const { player, realCtx, getCreatedSources, getCreatedGains } = createSpiedPlayer();
       const corruptCue = createTestAudioCue({ id: 'cue-corrupt-silence-first' });
       const corruptBytes = createCorruptMp3Bytes();
 
@@ -227,15 +229,22 @@ describe('Tauri WebView BookScore Validation', () => {
           player.playCue(corruptCue, corruptBytes.buffer as ArrayBuffer),
         ).rejects.toThrow();
 
-        // Player must remain in silent/null state with no active cue or started source nodes
+        // Player must remain in silent/null state with no active cue
         expect(player.getCurrentCue()).toBeNull();
+
+        // Verify per-cue created gain node (gains[1]) was disconnected to prevent resource leak
+        const gains = getCreatedGains();
+        expect(gains.length).toBeGreaterThanOrEqual(2);
+        expect(gains[1]!.disconnectSpy).toHaveBeenCalled();
+
+        // Verify created source node was disconnected and never started
         const sources = getCreatedSources();
-        if (sources.length > 0) {
-          expect(sources[0]!.startSpy).not.toHaveBeenCalled();
-        }
+        expect(sources.length).toBeGreaterThanOrEqual(1);
+        expect(sources[0]!.startSpy).not.toHaveBeenCalled();
+        expect(sources[0]!.disconnectSpy).toHaveBeenCalled();
 
         console.log(
-          '[PASS] Silence-first decode failure correctly rejected and maintained silent state.',
+          '[PASS] Silence-first decode failure correctly rejected, cleaned up nodes, and maintained silent state.',
         );
       } finally {
         await player.dispose();

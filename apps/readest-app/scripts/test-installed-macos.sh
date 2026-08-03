@@ -12,18 +12,20 @@ WEBDRIVER_PORT=4445
 TIMEOUT=180
 POLL_INTERVAL=3
 
-# Locate built binary path
-# In Tauri, tauri build packages the app statically.
-# When --features webdriver is enabled, the compiled binary hosts a W3C WebDriver server on port 4445.
-# Workspace cargo builds output to repository root target directory.
-if [ -d "../../target/debug/bundle/macos/Readest.app" ]; then
-  APP_PATH="../../target/debug/bundle/macos/Readest.app"
-elif [ -d "target/debug/bundle/macos/Readest.app" ]; then
-  APP_PATH="target/debug/bundle/macos/Readest.app"
-else
-  APP_PATH="src-tauri/target/debug/bundle/macos/Readest.app"
-fi
-BINARY_PATH="${APP_PATH}/Contents/MacOS/readest"
+# Helper to locate built binary path across workspace structures
+find_app_path() {
+  if [ -d "../target/debug/bundle/macos/Readest.app" ]; then
+    echo "../target/debug/bundle/macos/Readest.app"
+  elif [ -d "../../target/debug/bundle/macos/Readest.app" ]; then
+    echo "../../target/debug/bundle/macos/Readest.app"
+  elif [ -d "target/debug/bundle/macos/Readest.app" ]; then
+    echo "target/debug/bundle/macos/Readest.app"
+  else
+    echo "src-tauri/target/debug/bundle/macos/Readest.app"
+  fi
+}
+
+APP_PATH="$(find_app_path)"
 
 cleanup() {
   echo "Stopping launched macOS app..."
@@ -51,6 +53,15 @@ if [ ! -d "${APP_PATH}" ]; then
 else
   echo "Found existing debug app at ${APP_PATH}. Running compiler update checks..."
   dotenv -e .env.tauri -- tauri build --debug --features webdriver --bundles app --no-sign
+fi
+
+# Re-resolve APP_PATH after build to ensure fresh build output is found
+APP_PATH="$(find_app_path)"
+BINARY_PATH="${APP_PATH}/Contents/MacOS/readest"
+
+if [ ! -f "${BINARY_PATH}" ]; then
+  echo "ERROR: Packaged macOS app binary not found at ${BINARY_PATH}."
+  exit 1
 fi
 
 # 2. Launch the compiled macOS app directly
