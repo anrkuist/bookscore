@@ -627,7 +627,7 @@ describe('Tauri WebView BookScore Validation', () => {
         const cleanPackagesMap = await loadInstalledPackages(realFs2, baseDir);
         const { candidates } = computeSoundtrackCandidates(editionId, cleanPackagesMap, {});
         expect(candidates.length).toBeGreaterThan(0);
-        expect(candidates[0]!.pkg.packageId).toBe(packageId);
+        expect(candidates[0]!.package.packageId).toBe(packageId);
 
         // Explicit reattachment
         const reattachRes = await associateSoundtrackToEdition(
