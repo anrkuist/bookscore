@@ -12,7 +12,6 @@ interface WebkitWindow extends Window {
 }
 
 describe('Tauri WebView BookScore Validation', () => {
-
   // 1. Packaged MP3 Decode Validation
   describe('Packaged MP3 Decode', () => {
     it('should successfully decode valid minimal MP3 bytes and return duration', async () => {
@@ -340,217 +339,338 @@ describe('Tauri WebView BookScore Validation', () => {
   // 3. Installed-Style macOS BookScore Reader Round-Trip Suite (#33)
   describe('Installed-Style macOS Reader Round-Trip Journey', () => {
     it('executes full installed-style macOS reader lifecycle from EPUB import to replay', async () => {
-      // Imports needed for service pipeline
+      const fsPromises = (await import('node:fs/promises')).default;
+      const os = (await import('node:os')).default;
+      const path = (await import('node:path')).default;
+      const { createTestFileSystem } = await import('../services/bookscore/testHelpers');
       const {
         importAndAssociateBookScorePackage,
-        createDevelopmentFixturePackageBytes,
         computeSoundtrackCandidates,
         associateSoundtrackToEdition,
       } = await import('@/services/bookscore/importService');
       const { exportBookScorePackage } = await import('@/services/bookscore/exportService');
       const { makeEditableCopy } = await import('@/services/bookscore/authoringService');
-      const { recordPackageRepairFailure } = await import('@/services/bookscore/persistence');
+      const { loadRepairQueue, loadInstalledPackages, loadLocalAssociations } = await import(
+        '@/services/bookscore/persistence'
+      );
       const { useSoundtrackStore } = await import('@/store/soundtrackStore');
+      const { ZipWriter, Uint8ArrayWriter, Uint8ArrayReader, TextReader } = await import(
+        '@zip.js/zip.js'
+      );
+      const { sha256Hex } = await import('@/services/bookscore/packageValidation');
+      type BaseDir = import('@/types/system').BaseDir;
 
-      // Create in-memory mock storage filesystems for profile 1 and clean profile 2
-      const profile1Storage = new Map<string, Uint8Array>();
-      const profile2Storage = new Map<string, Uint8Array>();
-
-      function createMemoryFs(storage: Map<string, Uint8Array>) {
-        return {
-          exists: async (p: string) => storage.has(p),
-          readBinaryFile: async (p: string) => {
-            const b = storage.get(p);
-            if (!b) throw new Error(`File not found: ${p}`);
-            return b;
-          },
-          writeBinaryFile: async (p: string, contents: Uint8Array) => {
-            storage.set(p, contents);
-          },
-          readTextFile: async (p: string) => {
-            const b = storage.get(p);
-            if (!b) throw new Error(`File not found: ${p}`);
-            return new TextDecoder().decode(b);
-          },
-          writeTextFile: async (p: string, contents: string) => {
-            storage.set(p, new TextEncoder().encode(contents));
-          },
-          createDir: async () => {},
-          removeFile: async (p: string) => {
-            storage.delete(p);
-          },
-          removeDir: async () => {},
-          readDir: async () => [],
-        };
-      }
-
-      const fs1 = createMemoryFs(profile1Storage);
-      const fs2 = createMemoryFs(profile2Storage);
-      const baseDir = 'Data' as const;
+      // Create real temp disk directory paths for profile 1 and clean profile 2
+      const tmpDir1 = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'bookscore-mac-prof1-'));
+      const tmpDir2 = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'bookscore-mac-prof2-'));
+      const realFs1 = createTestFileSystem(tmpDir1);
+      const realFs2 = createTestFileSystem(tmpDir2);
+      const baseDir: BaseDir = 'Data';
 
       const editionId = 'epub-edition-mac-roundtrip-33';
-      const validMp3 = createMinimalValidMp3Bytes();
+      const packageId = 'pkg-mac-roundtrip-33';
+      const mp3A = createMinimalValidMp3Bytes();
+      const mp3B = new Uint8Array([...createMinimalValidMp3Bytes(), 0xff, 0xfb, 0x90, 0x64]);
+      const hashA = await sha256Hex(mp3A);
+      const hashB = await sha256Hex(mp3B);
 
-      // Step A: EPUB import simulation & package creation
-      const zipBytes = await createDevelopmentFixturePackageBytes(
-        validMp3,
-        'pkg-mac-roundtrip',
-        'macOS Installed Reader Soundtrack',
-        editionId,
-      );
+      // Build a valid multi-cue package fixture with two distinct decodable audio assets
+      const encoder = new TextEncoder();
+      const manifestObj = {
+        packageId,
+        title: 'macOS Installed Reader Soundtrack',
+        version: 1,
+        manifestHash: '',
+        editionCompatibility: [
+          {
+            algorithm: 'readest-partial-md5-v1' as const,
+            digest: editionId,
+            epubByteLength: 1048576,
+          },
+        ],
+        assets: [
+          {
+            id: 'asset-a',
+            path: 'audio/asset-a.mp3',
+            mimeType: 'audio/mpeg' as const,
+            hash: hashA,
+            durationSec: 2.6,
+          },
+          {
+            id: 'asset-b',
+            path: 'audio/asset-b.mp3',
+            mimeType: 'audio/mpeg' as const,
+            hash: hashB,
+            durationSec: 2.6,
+          },
+        ],
+        cues: [
+          {
+            id: 'cue-a',
+            startCfi: 'epubcfi(/6/2!/4/2:0)',
+            type: 'audio' as const,
+            assetId: 'asset-a',
+            startSec: 0,
+            loopStartSec: 0.2,
+            loopEndSec: 2.4,
+            volume: 0.9,
+            crossfadeSec: 0.2,
+          },
+          {
+            id: 'cue-b',
+            startCfi: 'epubcfi(/6/10!/4/2:0)',
+            type: 'audio' as const,
+            assetId: 'asset-b',
+            startSec: 0,
+            loopStartSec: 0.1,
+            loopEndSec: 2.5,
+            volume: 0.8,
+            crossfadeSec: 0.2,
+          },
+        ],
+      };
 
-      // Step B: Soundtrack attachment & Editable Copy creation
-      const importRes = await importAndAssociateBookScorePackage(
-        fs1 as any,
-        baseDir,
-        zipBytes,
-        editionId,
-        undefined,
-        { autoAttach: true },
-      );
-      expect(importRes.success).toBe(true);
-      expect(importRes.package).toBeDefined();
-      expect(importRes.association?.selected).toBe(true);
+      const copyManifest = { ...manifestObj };
+      delete (copyManifest as Partial<typeof copyManifest>).manifestHash;
+      manifestObj.manifestHash = await sha256Hex(encoder.encode(JSON.stringify(copyManifest)));
 
-      const copyRes = await makeEditableCopy(
-        fs1 as any,
-        baseDir,
-        importRes.package!.packageId,
-        importRes.package!.manifestHash,
-        editionId,
-      );
-      expect(copyRes.success).toBe(true);
-      if (copyRes.success) {
-        expect(copyRes.copy.sourcePackageId).toBe(importRes.package!.packageId);
+      const zipWriter = new ZipWriter(new Uint8ArrayWriter());
+      await zipWriter.add('manifest.json', new TextReader(JSON.stringify(manifestObj)));
+      await zipWriter.add('audio/asset-a.mp3', new Uint8ArrayReader(mp3A));
+      await zipWriter.add('audio/asset-b.mp3', new Uint8ArrayReader(mp3B));
+      const zipBytes = await zipWriter.close();
+
+      const AudioCtx =
+        window.AudioContext || (window as unknown as WebkitWindow).webkitAudioContext;
+      const realCtx = new AudioCtx();
+      const createdSources: any[] = [];
+      const createdGains: any[] = [];
+      const wrappedCtx = {
+        state: realCtx.state,
+        get currentTime() {
+          return realCtx.currentTime;
+        },
+        get destination() {
+          return realCtx.destination;
+        },
+        resume: async () => {
+          await realCtx.resume();
+          wrappedCtx.state = realCtx.state;
+        },
+        close: async () => {
+          await realCtx.close();
+          wrappedCtx.state = realCtx.state;
+        },
+        createGain: () => {
+          const g = realCtx.createGain();
+          const setValueSpy = vi.spyOn(g.gain, 'setValueAtTime');
+          const rampSpy = vi.spyOn(g.gain, 'linearRampToValueAtTime');
+          const disconnectSpy = vi.spyOn(g, 'disconnect');
+          createdGains.push({ gainNode: g, setValueSpy, rampSpy, disconnectSpy });
+          return g;
+        },
+        createBuffer: (channels: number, len: number, rate: number) =>
+          realCtx.createBuffer(channels, len, rate),
+        decodeAudioData: (buf: ArrayBuffer) => realCtx.decodeAudioData(buf),
+        createBufferSource: () => {
+          const src = realCtx.createBufferSource();
+          const startSpy = vi.spyOn(src, 'start');
+          const stopSpy = vi.spyOn(src, 'stop');
+          const disconnectSpy = vi.spyOn(src, 'disconnect');
+          createdSources.push({ src, startSpy, stopSpy, disconnectSpy });
+          return src;
+        },
+      };
+      const player = new WebAudioSoundtrackPlayer(wrappedCtx as any);
+
+      try {
+        // Step A: EPUB import simulation & package creation
+        const importRes = await importAndAssociateBookScorePackage(
+          realFs1,
+          baseDir,
+          zipBytes,
+          editionId,
+          undefined,
+          { autoAttach: true },
+        );
+        expect(importRes.success).toBe(true);
+        expect(importRes.package).toBeDefined();
+        expect(importRes.association?.selected).toBe(true);
+
+        const manifestHash = importRes.package!.manifestHash;
+
+        // Step B: Soundtrack attachment & Editable Copy creation
+        const copyRes = await makeEditableCopy(
+          realFs1,
+          baseDir,
+          packageId,
+          manifestHash,
+          editionId,
+        );
+        expect(copyRes.success).toBe(true);
+        if (copyRes.success) {
+          expect(copyRes.copy.sourcePackageId).toBe(packageId);
+        }
+
+        // Step C: User-started playback and crossfade with real spied player
+        const store = useSoundtrackStore.getState();
+        store.resetSoundtrack();
+        store.setCapabilityEnabled(true);
+
+        store.registerSoundtrackPlayer(player);
+        await player.unlockGesture();
+        expect(player.isUnlocked()).toBe(true);
+
+        const packagesMap = await loadInstalledPackages(realFs1, baseDir);
+        const associationsMap = await loadLocalAssociations(realFs1, baseDir);
+
+        // Load soundtrack for reopened book at initial CFI (starts selected but PAUSED)
+        store.loadSoundtrackForBook(
+          editionId,
+          packagesMap,
+          associationsMap,
+          'epubcfi(/6/2!/4/2:0)',
+          editionId,
+        );
+        expect(useSoundtrackStore.getState().playbackStatus).toBe('paused');
+        expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-a');
+        expect(useSoundtrackStore.getState().isUserPlaying).toBe(false);
+
+        // User explicitly starts playback (gesture unlocked + user play)
+        await store.play(true, realFs1);
+        expect(useSoundtrackStore.getState().isUserPlaying).toBe(true);
+        expect(useSoundtrackStore.getState().playbackStatus).toBe('playing');
+        expect(createdSources.length).toBe(1);
+
+        // Reader location moves to cue B -> real crossfade / cue transition occurs
+        store.reportLocation({ seq: 1, kind: 'resolved', cfi: 'epubcfi(/6/10!/4/2:0)' });
+        expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-b');
+
+        expect(createdSources.length).toBe(2);
+        const sourceA = createdSources[0]!;
+        const sourceB = createdSources[1]!;
+        expect(sourceB.src).not.toBe(sourceA.src);
+
+        // Assert gain ramp down was initiated for sourceA
+        expect(createdGains.length).toBeGreaterThanOrEqual(3);
+        expect(createdGains[1]!.rampSpy).toHaveBeenCalledWith(0, expect.any(Number));
+
+        // Step D: Induce real active-playback asset failure in installed profile & assert repair/silence recovery
+        // Remove physical asset-a file from real disk storage
+        const assetPath = `soundtracks/${packageId}/${manifestHash}/audio/asset-a.mp3`;
+        await (
+          realFs1 as unknown as { deleteFile: (p: string, b: string) => Promise<void> }
+        ).deleteFile(assetPath, baseDir);
+
+        // Move reader location back to cue-a to trigger active playback load of missing asset
+        store.reportLocation({ seq: 2, kind: 'resolved', cfi: 'epubcfi(/6/2!/4/2:0)' });
+
+        // Playback MUST transition to silence-first recovery state
+        expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
+
+        // Verify failure was recorded in repairQueue
+        const repairQueue = await loadRepairQueue(realFs1, baseDir);
+        const repairItem = repairQueue[`${packageId}:${manifestHash}`];
+        expect(repairItem).toBeDefined();
+        expect(repairItem?.reason).toBe('missing');
+
+        // Repair/re-import package back into profile 1
+        const repairImportRes = await importAndAssociateBookScorePackage(
+          realFs1,
+          baseDir,
+          zipBytes,
+          editionId,
+          undefined,
+          { autoAttach: true },
+        );
+        expect(repairImportRes.success).toBe(true);
+
+        // Step E: Close/reopen with selected cue in paused state
+        store.resetSoundtrack();
+        store.setCapabilityEnabled(true);
+        store.registerSoundtrackPlayer(player);
+
+        const updatedPkgsMap = await loadInstalledPackages(realFs1, baseDir);
+        const updatedAssocsMap = await loadLocalAssociations(realFs1, baseDir);
+
+        store.loadSoundtrackForBook(
+          editionId,
+          updatedPkgsMap,
+          updatedAssocsMap,
+          'epubcfi(/6/2!/4/2:0)',
+          editionId,
+        );
+        const reopenedState = useSoundtrackStore.getState();
+        expect(reopenedState.activePackage?.packageId).toBe(packageId);
+        expect(reopenedState.selectedCue?.id).toBe('cue-a');
+        expect(reopenedState.playbackStatus).toBe('paused');
+        expect(reopenedState.isUserPlaying).toBe(false);
+
+        // Step F: Export, clean-profile import, explicit reattachment, and replay
+        const exportRes = await exportBookScorePackage(realFs1, baseDir, packageId, manifestHash);
+        expect(exportRes.success).toBe(true);
+        if (!exportRes.success) return;
+        expect(exportRes.archiveBytes).toBeDefined();
+
+        // Clean profile import (realFs2 starts empty)
+        const cleanImportRes = await importAndAssociateBookScorePackage(
+          realFs2,
+          baseDir,
+          exportRes.archiveBytes,
+          editionId,
+          undefined,
+          { autoAttach: false },
+        );
+        expect(cleanImportRes.success).toBe(true);
+
+        // Candidate matching for edition
+        const cleanPackagesMap = await loadInstalledPackages(realFs2, baseDir);
+        const { candidates } = computeSoundtrackCandidates(editionId, cleanPackagesMap, {});
+        expect(candidates.length).toBeGreaterThan(0);
+        expect(candidates[0]!.pkg.packageId).toBe(packageId);
+
+        // Explicit reattachment
+        const reattachRes = await associateSoundtrackToEdition(
+          realFs2,
+          baseDir,
+          editionId,
+          cleanImportRes.package!.packageId,
+          cleanImportRes.package!.manifestHash,
+        );
+        expect(reattachRes.success).toBe(true);
+        if (!reattachRes.success || !reattachRes.association) return;
+        expect(reattachRes.association.selected).toBe(true);
+
+        // Replay in clean profile
+        store.resetSoundtrack();
+        store.setCapabilityEnabled(true);
+        store.registerSoundtrackPlayer(player);
+
+        const cleanAssociationsMap = await loadLocalAssociations(realFs2, baseDir);
+
+        store.loadSoundtrackForBook(
+          editionId,
+          cleanPackagesMap,
+          cleanAssociationsMap,
+          'epubcfi(/6/2!/4/2:0)',
+          editionId,
+        );
+        expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-a');
+        expect(useSoundtrackStore.getState().playbackStatus).toBe('paused');
+
+        await store.play(true, realFs2);
+        expect(useSoundtrackStore.getState().isUserPlaying).toBe(true);
+        expect(useSoundtrackStore.getState().playbackStatus).toBe('playing');
+
+        console.log(
+          '[PASS] Installed-style macOS BookScore reader full round-trip journey passed successfully.',
+        );
+      } finally {
+        await player.dispose();
+        await realCtx.close();
+        await fsPromises.rm(tmpDir1, { recursive: true, force: true });
+        await fsPromises.rm(tmpDir2, { recursive: true, force: true });
       }
-
-      // Step C: User-started playback and crossfade
-      const store = useSoundtrackStore.getState();
-      store.resetSoundtrack();
-      store.setCapabilityEnabled(true);
-
-      const activeCueA = importRes.package!.manifest.cues[0]!;
-      const cueB = { ...activeCueA, id: 'cue-b-roundtrip', startCfi: 'epubcfi(/6/10!/4/2:0)' };
-      const packagesMap = {
-        [`${importRes.package!.packageId}:${importRes.package!.manifestHash}`]: importRes.package!,
-      };
-      const associationsMap = {
-        [editionId]: importRes.association!,
-      };
-
-      // Load soundtrack for reopened book at initial CFI
-      store.loadSoundtrackForBook(
-        editionId,
-        packagesMap,
-        associationsMap,
-        'epubcfi(/6/2!/4/2:0)',
-      );
-      expect(useSoundtrackStore.getState().playbackStatus).toBe('paused');
-      expect(useSoundtrackStore.getState().selectedCue?.id).toBe(activeCueA.id);
-
-      // User hits play
-      await store.play(true);
-      expect(useSoundtrackStore.getState().isUserPlaying).toBe(true);
-
-      // Reader location moves to cue B -> crossfade / cue transition occurs
-      store.reportLocation({ seq: 1, kind: 'resolved', cfi: 'epubcfi(/6/10!/4/2:0)' });
-      expect(useSoundtrackStore.getState().selectedCue?.id).toBe(cueB.id);
-
-      // Step D: Repairable failure / silence recovery
-      // Simulate decode or missing file failure
-      await recordPackageRepairFailure(fs1 as any, baseDir, {
-        packageId: importRes.package!.packageId,
-        manifestHash: importRes.package!.manifestHash,
-        title: importRes.package!.manifest.title,
-        reason: 'corrupt',
-        assetId: 'asset-mac-roundtrip',
-        detectedAt: Date.now(),
-        affectedEditionIds: [editionId],
-      });
-
-      // When repair failure occurs, playback transitions to silence
-      store.resetSoundtrack();
-      expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
-
-      // Step E: Close/reopen with selected cue paused
-      store.setCapabilityEnabled(true);
-      store.loadSoundtrackForBook(
-        editionId,
-        packagesMap,
-        associationsMap,
-        'epubcfi(/6/2!/4/2:0)',
-      );
-      const reopenedState = useSoundtrackStore.getState();
-      expect(reopenedState.activePackage?.packageId).toBe(importRes.package!.packageId);
-      expect(reopenedState.selectedCue?.id).toBe(activeCueA.id);
-      expect(reopenedState.playbackStatus).toBe('paused');
-      expect(reopenedState.isUserPlaying).toBe(false);
-
-      // Step F: Export, clean-profile import, explicit reattachment, and replay
-      const exportRes = await exportBookScorePackage(
-        fs1 as any,
-        baseDir,
-        importRes.package!.packageId,
-        importRes.package!.manifestHash,
-      );
-      expect(exportRes.success).toBe(true);
-      expect(exportRes.archiveBytes).toBeDefined();
-
-      // Clean profile import (fs2 has empty storage)
-      const cleanImportRes = await importAndAssociateBookScorePackage(
-        fs2 as any,
-        baseDir,
-        exportRes.archiveBytes!,
-        editionId,
-        undefined,
-        { autoAttach: false },
-      );
-      expect(cleanImportRes.success).toBe(true);
-
-      // Candidate matching for edition
-      const candidatePkgs = [cleanImportRes.package!];
-      const candidates = computeSoundtrackCandidates(editionId, candidatePkgs, {});
-      expect(candidates.length).toBeGreaterThan(0);
-      expect(candidates[0]!.pkg.packageId).toBe(importRes.package!.packageId);
-
-      // Explicit reattachment
-      const reattachRes = await associateSoundtrackToEdition(
-        fs2 as any,
-        baseDir,
-        editionId,
-        cleanImportRes.package!.packageId,
-        cleanImportRes.package!.manifestHash,
-      );
-      expect(reattachRes.success).toBe(true);
-      expect(reattachRes.association.selected).toBe(true);
-
-      // Replay in clean profile
-      store.resetSoundtrack();
-      store.setCapabilityEnabled(true);
-      const cleanPackagesMap = {
-        [`${cleanImportRes.package!.packageId}:${cleanImportRes.package!.manifestHash}`]:
-          cleanImportRes.package!,
-      };
-      const cleanAssociationsMap = {
-        [editionId]: reattachRes.association,
-      };
-
-      store.loadSoundtrackForBook(
-        editionId,
-        cleanPackagesMap,
-        cleanAssociationsMap,
-        'epubcfi(/6/2!/4/2:0)',
-      );
-      expect(useSoundtrackStore.getState().selectedCue?.id).toBe(activeCueA.id);
-      expect(useSoundtrackStore.getState().playbackStatus).toBe('paused');
-
-      await store.play(true);
-      expect(useSoundtrackStore.getState().isUserPlaying).toBe(true);
-
-      console.log(
-        '[PASS] Installed-style macOS BookScore reader full round-trip journey passed successfully.',
-      );
     });
   });
 });
-
