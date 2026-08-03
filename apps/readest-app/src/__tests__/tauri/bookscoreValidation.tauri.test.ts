@@ -26,6 +26,69 @@ describe('Tauri WebView BookScore Validation', () => {
     disconnectSpy: ReturnType<typeof vi.fn>;
   }
 
+  function createSpiedPlayer() {
+    const AudioCtx = window.AudioContext || (window as unknown as WebkitWindow).webkitAudioContext;
+    if (!AudioCtx) {
+      throw new Error('Web Audio API (AudioContext) is not supported in this environment');
+    }
+
+    const realCtx = new AudioCtx();
+    let lastCreatedSource: AudioBufferSourceNode | null = null;
+    const createdSources: TrackedSource[] = [];
+    const createdGains: TrackedGain[] = [];
+
+    // Wrap AudioContext to intercept source node creation and monitor loops/playback
+    const wrappedCtx = {
+      state: realCtx.state,
+      get currentTime() {
+        return realCtx.currentTime;
+      },
+      get destination() {
+        return realCtx.destination;
+      },
+      resume: async () => {
+        await realCtx.resume();
+        wrappedCtx.state = realCtx.state;
+      },
+      close: async () => {
+        await realCtx.close();
+        wrappedCtx.state = realCtx.state;
+      },
+      createGain: () => {
+        const g = realCtx.createGain();
+        const setValueSpy = vi.spyOn(g.gain, 'setValueAtTime');
+        const rampSpy = vi.spyOn(g.gain, 'linearRampToValueAtTime');
+        const disconnectSpy = vi.spyOn(g, 'disconnect');
+        createdGains.push({ gainNode: g, setValueSpy, rampSpy, disconnectSpy });
+        return g;
+      },
+      createBuffer: (channels: number, len: number, rate: number) =>
+        realCtx.createBuffer(channels, len, rate),
+      decodeAudioData: (buf: ArrayBuffer) => realCtx.decodeAudioData(buf),
+      createBufferSource: () => {
+        const src = realCtx.createBufferSource();
+        const startSpy = vi.spyOn(src, 'start');
+        const stopSpy = vi.spyOn(src, 'stop');
+        const disconnectSpy = vi.spyOn(src, 'disconnect');
+        lastCreatedSource = src;
+        createdSources.push({ src, startSpy, stopSpy, disconnectSpy });
+        return src;
+      },
+    };
+
+    const player = new WebAudioSoundtrackPlayer(
+      wrappedCtx as unknown as ConstructorParameters<typeof WebAudioSoundtrackPlayer>[0],
+    );
+    return {
+      player,
+      realCtx,
+      wrappedCtx,
+      getLastSource: () => lastCreatedSource,
+      getCreatedSources: () => createdSources,
+      getCreatedGains: () => createdGains,
+    };
+  }
+
   // 1. Packaged MP3 Decode Validation
   describe('Packaged MP3 Decode', () => {
     it('should successfully decode valid minimal MP3 bytes and return duration', async () => {
@@ -56,72 +119,6 @@ describe('Tauri WebView BookScore Validation', () => {
 
   // 2. Player Integration (Loops, Transitions, Pause/Resume, Cleanup, Silence failures)
   describe('Soundtrack Player playback logic', () => {
-    // Create a helper to instantiate the player with a wrapped/spied context
-
-    function createSpiedPlayer() {
-      const AudioCtx =
-        window.AudioContext || (window as unknown as WebkitWindow).webkitAudioContext;
-      if (!AudioCtx) {
-        throw new Error('Web Audio API (AudioContext) is not supported in this environment');
-      }
-
-      const realCtx = new AudioCtx();
-      let lastCreatedSource: AudioBufferSourceNode | null = null;
-      const createdSources: TrackedSource[] = [];
-      const createdGains: TrackedGain[] = [];
-
-      // Wrap AudioContext to intercept source node creation and monitor loops/playback
-      const wrappedCtx = {
-        state: realCtx.state,
-        get currentTime() {
-          return realCtx.currentTime;
-        },
-        get destination() {
-          return realCtx.destination;
-        },
-        resume: async () => {
-          await realCtx.resume();
-          wrappedCtx.state = realCtx.state;
-        },
-        close: async () => {
-          await realCtx.close();
-          wrappedCtx.state = realCtx.state;
-        },
-        createGain: () => {
-          const g = realCtx.createGain();
-          const setValueSpy = vi.spyOn(g.gain, 'setValueAtTime');
-          const rampSpy = vi.spyOn(g.gain, 'linearRampToValueAtTime');
-          const disconnectSpy = vi.spyOn(g, 'disconnect');
-          createdGains.push({ gainNode: g, setValueSpy, rampSpy, disconnectSpy });
-          return g;
-        },
-        createBuffer: (channels: number, len: number, rate: number) =>
-          realCtx.createBuffer(channels, len, rate),
-        decodeAudioData: (buf: ArrayBuffer) => realCtx.decodeAudioData(buf),
-        createBufferSource: () => {
-          const src = realCtx.createBufferSource();
-          const startSpy = vi.spyOn(src, 'start');
-          const stopSpy = vi.spyOn(src, 'stop');
-          const disconnectSpy = vi.spyOn(src, 'disconnect');
-          lastCreatedSource = src;
-          createdSources.push({ src, startSpy, stopSpy, disconnectSpy });
-          return src;
-        },
-      };
-
-      const player = new WebAudioSoundtrackPlayer(
-        wrappedCtx as unknown as ConstructorParameters<typeof WebAudioSoundtrackPlayer>[0],
-      );
-      return {
-        player,
-        realCtx,
-        wrappedCtx,
-        getLastSource: () => lastCreatedSource,
-        getCreatedSources: () => createdSources,
-        getCreatedGains: () => createdGains,
-      };
-    }
-
     it('should configure loops and start playback on target source node', async () => {
       const { player, realCtx, getLastSource } = createSpiedPlayer();
       const cue = createTestAudioCue({ loopStartSec: 0.5, loopEndSec: 2.0 });
@@ -356,6 +353,9 @@ describe('Tauri WebView BookScore Validation', () => {
       );
       const { sha256Hex } = await import('@/services/bookscore/packageValidation');
       const { getAssetFilePath } = await import('@/services/bookscore/assetStorage');
+      const { partialMD5 } = await import('@/utils/md5');
+      const { DocumentLoader } = await import('@/libs/document');
+      const { computeBookNav } = await import('@/services/nav');
       type BaseDir = import('@/types/system').BaseDir;
 
       function createIsolatedMemoryFileSystem() {
@@ -440,19 +440,37 @@ describe('Tauri WebView BookScore Validation', () => {
         };
       }
 
+      // Step A: Load real EPUB file fixture, open via DocumentLoader & computeNav
+      const fixtureUrl = new URL('../fixtures/data/sample-alice.epub', import.meta.url).href;
+      const epubBuf = await (await fetch(fixtureUrl)).arrayBuffer();
+      const epubFile = new File([epubBuf], 'sample-alice.epub', { type: 'application/epub+zip' });
+
+      // Compute actual edition digest from the imported EPUB file
+      const editionId = await partialMD5(epubFile);
+
+      // Open EPUB via DocumentLoader (simulates reader loading real book)
+      const bookDoc = (await new DocumentLoader(epubFile).open()).book;
+      const bookNav = await computeBookNav(bookDoc);
+
+      // Extract real reader CFIs from EPUB spine
+      const sectionIds = Object.keys(bookNav.sections);
+      const sec0 = bookNav.sections[sectionIds[0]!];
+      const sec1 = bookNav.sections[sectionIds[1]!];
+      const cueACfi = sec0?.fragments[0]?.cfi || 'epubcfi(/6/2!/4/2:0)';
+      const cueBCfi = sec1?.fragments[0]?.cfi || 'epubcfi(/6/10!/4/2:0)';
+
       // Create isolated storage filesystems for profile 1 and clean profile 2
       const realFs1 = createIsolatedMemoryFileSystem();
       const realFs2 = createIsolatedMemoryFileSystem();
       const baseDir: BaseDir = 'Data';
 
-      const editionId = 'epub-edition-mac-roundtrip-33';
       const packageId = 'pkg-mac-roundtrip-33';
       const mp3A = createMinimalValidMp3Bytes();
       const mp3B = new Uint8Array([...createMinimalValidMp3Bytes(), 0xff, 0xfb, 0x90, 0x64]);
       const hashA = await sha256Hex(mp3A);
       const hashB = await sha256Hex(mp3B);
 
-      // Build a valid multi-cue package fixture with two distinct decodable audio assets
+      // Build a valid multi-cue package fixture mapped to the real EPUB edition and spine CFIs
       const encoder = new TextEncoder();
       const manifestObj = {
         packageId,
@@ -463,7 +481,7 @@ describe('Tauri WebView BookScore Validation', () => {
           {
             algorithm: 'readest-partial-md5-v1' as const,
             digest: editionId,
-            epubByteLength: 1048576,
+            epubByteLength: epubBuf.byteLength,
           },
         ],
         assets: [
@@ -485,7 +503,7 @@ describe('Tauri WebView BookScore Validation', () => {
         cues: [
           {
             id: 'cue-a',
-            startCfi: 'epubcfi(/6/2!/4/2:0)',
+            startCfi: cueACfi,
             type: 'audio' as const,
             assetId: 'asset-a',
             startSec: 0,
@@ -496,7 +514,7 @@ describe('Tauri WebView BookScore Validation', () => {
           },
           {
             id: 'cue-b',
-            startCfi: 'epubcfi(/6/10!/4/2:0)',
+            startCfi: cueBCfi,
             type: 'audio' as const,
             assetId: 'asset-b',
             startSec: 0,
@@ -518,53 +536,12 @@ describe('Tauri WebView BookScore Validation', () => {
       await zipWriter.add('audio/asset-b.mp3', new Uint8ArrayReader(mp3B));
       const zipBytes = await zipWriter.close();
 
-      const AudioCtx =
-        window.AudioContext || (window as unknown as WebkitWindow).webkitAudioContext;
-      const realCtx = new AudioCtx();
-      const createdSources: TrackedSource[] = [];
-      const createdGains: TrackedGain[] = [];
-      const wrappedCtx = {
-        state: realCtx.state,
-        get currentTime() {
-          return realCtx.currentTime;
-        },
-        get destination() {
-          return realCtx.destination;
-        },
-        resume: async () => {
-          await realCtx.resume();
-          wrappedCtx.state = realCtx.state;
-        },
-        close: async () => {
-          await realCtx.close();
-          wrappedCtx.state = realCtx.state;
-        },
-        createGain: () => {
-          const g = realCtx.createGain();
-          const setValueSpy = vi.spyOn(g.gain, 'setValueAtTime');
-          const rampSpy = vi.spyOn(g.gain, 'linearRampToValueAtTime');
-          const disconnectSpy = vi.spyOn(g, 'disconnect');
-          createdGains.push({ gainNode: g, setValueSpy, rampSpy, disconnectSpy });
-          return g;
-        },
-        createBuffer: (channels: number, len: number, rate: number) =>
-          realCtx.createBuffer(channels, len, rate),
-        decodeAudioData: (buf: ArrayBuffer) => realCtx.decodeAudioData(buf),
-        createBufferSource: () => {
-          const src = realCtx.createBufferSource();
-          const startSpy = vi.spyOn(src, 'start');
-          const stopSpy = vi.spyOn(src, 'stop');
-          const disconnectSpy = vi.spyOn(src, 'disconnect');
-          createdSources.push({ src, startSpy, stopSpy, disconnectSpy });
-          return src;
-        },
-      };
-      const player = new WebAudioSoundtrackPlayer(
-        wrappedCtx as unknown as ConstructorParameters<typeof WebAudioSoundtrackPlayer>[0],
-      );
+      const { player, realCtx, getCreatedSources, getCreatedGains } = createSpiedPlayer();
+      const createdSources = getCreatedSources();
+      const createdGains = getCreatedGains();
 
       try {
-        // Step A: EPUB import simulation & package creation
+        // Step B: Soundtrack attachment & Editable Copy creation
         const importRes = await importAndAssociateBookScorePackage(
           realFs1,
           baseDir,
@@ -579,7 +556,6 @@ describe('Tauri WebView BookScore Validation', () => {
 
         const manifestHash = importRes.package!.manifestHash;
 
-        // Step B: Soundtrack attachment & Editable Copy creation
         const copyRes = await makeEditableCopy(
           realFs1,
           baseDir,
@@ -605,13 +581,7 @@ describe('Tauri WebView BookScore Validation', () => {
         const associationsMap = await loadLocalAssociations(realFs1, baseDir);
 
         // Load soundtrack for reopened book at initial CFI (starts selected but PAUSED)
-        store.loadSoundtrackForBook(
-          editionId,
-          packagesMap,
-          associationsMap,
-          'epubcfi(/6/2!/4/2:0)',
-          editionId,
-        );
+        store.loadSoundtrackForBook(editionId, packagesMap, associationsMap, cueACfi, editionId);
         expect(useSoundtrackStore.getState().playbackStatus).toBe('paused');
         expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-a');
         expect(useSoundtrackStore.getState().isUserPlaying).toBe(false);
@@ -623,7 +593,7 @@ describe('Tauri WebView BookScore Validation', () => {
         expect(createdSources.length).toBe(1);
 
         // Reader location moves to cue B -> real crossfade / cue transition occurs
-        store.reportLocation({ seq: 1, kind: 'resolved', cfi: 'epubcfi(/6/10!/4/2:0)' });
+        store.reportLocation({ seq: 1, kind: 'resolved', cfi: cueBCfi });
         await new Promise((r) => setTimeout(r, 50));
         expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-b');
 
@@ -644,7 +614,7 @@ describe('Tauri WebView BookScore Validation', () => {
         ).deleteFile(assetPath, baseDir);
 
         // Move reader location back to cue-a to trigger active playback load of missing asset
-        store.reportLocation({ seq: 2, kind: 'resolved', cfi: 'epubcfi(/6/2!/4/2:0)' });
+        store.reportLocation({ seq: 2, kind: 'resolved', cfi: cueACfi });
         await new Promise((r) => setTimeout(r, 50));
 
         // Playback MUST transition to silence-first recovery state
@@ -667,6 +637,26 @@ describe('Tauri WebView BookScore Validation', () => {
         );
         expect(repairImportRes.success).toBe(true);
 
+        // Assert repair queue entry is removed / cleared after successful re-import
+        const clearedQueue = await loadRepairQueue(realFs1, baseDir);
+        expect(clearedQueue[`${packageId}:${manifestHash}`]).toBeUndefined();
+
+        // Reload original profile 1 maps and verify user-replay of repaired cue A
+        const repairedPkgsMap = await loadInstalledPackages(realFs1, baseDir);
+        const repairedAssocsMap = await loadLocalAssociations(realFs1, baseDir);
+        store.loadSoundtrackForBook(
+          editionId,
+          repairedPkgsMap,
+          repairedAssocsMap,
+          cueACfi,
+          editionId,
+        );
+        const countBeforeReplay = createdSources.length;
+        await store.play(true, realFs1);
+        expect(useSoundtrackStore.getState().isUserPlaying).toBe(true);
+        expect(useSoundtrackStore.getState().playbackStatus).toBe('playing');
+        expect(createdSources.length).toBeGreaterThan(countBeforeReplay);
+
         // Step E: Close/reopen with selected cue in paused state
         store.resetSoundtrack();
         store.setCapabilityEnabled(true);
@@ -679,7 +669,7 @@ describe('Tauri WebView BookScore Validation', () => {
           editionId,
           updatedPkgsMap,
           updatedAssocsMap,
-          'epubcfi(/6/2!/4/2:0)',
+          cueACfi,
           editionId,
         );
         const reopenedState = useSoundtrackStore.getState();
@@ -734,7 +724,7 @@ describe('Tauri WebView BookScore Validation', () => {
           editionId,
           cleanPackagesMap,
           cleanAssociationsMap,
-          'epubcfi(/6/2!/4/2:0)',
+          cueACfi,
           editionId,
         );
         expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-a');
