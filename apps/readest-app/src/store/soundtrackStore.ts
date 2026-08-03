@@ -82,6 +82,7 @@ export interface SoundtrackStoreState {
 
 const locationSeam = new LocationReportSeam();
 let playerInstance: SoundtrackPlayer | null = null;
+let activeFsInstance: FileSystem | null = null;
 
 async function resolveAndPlayAudioCue(
   cue: SoundtrackCue,
@@ -336,7 +337,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
             newCue,
             activePackage,
             playerInstance,
-            undefined,
+            activeFsInstance ?? undefined,
             false,
             get().activeEditionId,
             (queue) => set({ repairQueue: queue }),
@@ -363,6 +364,10 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
       activeEditionId,
     } = get();
     if (!capabilityEnabled) return;
+
+    if (customFs) {
+      activeFsInstance = customFs;
+    }
 
     let unlocked = isGestureUnlocked;
     if (fromGesture && playerInstance) {
@@ -434,6 +439,7 @@ export const useSoundtrackStore = create<SoundtrackStoreState>((set, get) => ({
 
   resetSoundtrack: () => {
     locationSeam.reset();
+    activeFsInstance = null;
     if (playerInstance) {
       void playerInstance.dispose();
       playerInstance = null;

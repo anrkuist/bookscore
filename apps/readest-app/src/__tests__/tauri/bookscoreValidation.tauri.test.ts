@@ -12,6 +12,20 @@ interface WebkitWindow extends Window {
 }
 
 describe('Tauri WebView BookScore Validation', () => {
+  interface TrackedSource {
+    src: AudioBufferSourceNode;
+    startSpy: ReturnType<typeof vi.fn>;
+    stopSpy: ReturnType<typeof vi.fn>;
+    disconnectSpy: ReturnType<typeof vi.fn>;
+  }
+
+  interface TrackedGain {
+    gainNode: GainNode;
+    setValueSpy: ReturnType<typeof vi.fn>;
+    rampSpy: ReturnType<typeof vi.fn>;
+    disconnectSpy: ReturnType<typeof vi.fn>;
+  }
+
   // 1. Packaged MP3 Decode Validation
   describe('Packaged MP3 Decode', () => {
     it('should successfully decode valid minimal MP3 bytes and return duration', async () => {
@@ -43,19 +57,6 @@ describe('Tauri WebView BookScore Validation', () => {
   // 2. Player Integration (Loops, Transitions, Pause/Resume, Cleanup, Silence failures)
   describe('Soundtrack Player playback logic', () => {
     // Create a helper to instantiate the player with a wrapped/spied context
-    interface TrackedSource {
-      src: AudioBufferSourceNode;
-      startSpy: ReturnType<typeof vi.fn>;
-      stopSpy: ReturnType<typeof vi.fn>;
-      disconnectSpy: ReturnType<typeof vi.fn>;
-    }
-
-    interface TrackedGain {
-      gainNode: GainNode;
-      setValueSpy: ReturnType<typeof vi.fn>;
-      rampSpy: ReturnType<typeof vi.fn>;
-      disconnectSpy: ReturnType<typeof vi.fn>;
-    }
 
     function createSpiedPlayer() {
       const AudioCtx =
@@ -339,10 +340,6 @@ describe('Tauri WebView BookScore Validation', () => {
   // 3. Installed-Style macOS BookScore Reader Round-Trip Suite (#33)
   describe('Installed-Style macOS Reader Round-Trip Journey', () => {
     it('executes full installed-style macOS reader lifecycle from EPUB import to replay', async () => {
-      const fsPromises = (await import('node:fs/promises')).default;
-      const os = (await import('node:os')).default;
-      const path = (await import('node:path')).default;
-      const { createTestFileSystem } = await import('../services/bookscore/testHelpers');
       const {
         importAndAssociateBookScorePackage,
         computeSoundtrackCandidates,
@@ -358,13 +355,94 @@ describe('Tauri WebView BookScore Validation', () => {
         '@zip.js/zip.js'
       );
       const { sha256Hex } = await import('@/services/bookscore/packageValidation');
+      const { getAssetFilePath } = await import('@/services/bookscore/assetStorage');
       type BaseDir = import('@/types/system').BaseDir;
 
-      // Create real temp disk directory paths for profile 1 and clean profile 2
-      const tmpDir1 = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'bookscore-mac-prof1-'));
-      const tmpDir2 = await fsPromises.mkdtemp(path.join(os.tmpdir(), 'bookscore-mac-prof2-'));
-      const realFs1 = createTestFileSystem(tmpDir1);
-      const realFs2 = createTestFileSystem(tmpDir2);
+      function createIsolatedMemoryFileSystem() {
+        const storage = new Map<string, Uint8Array>();
+        const normalize = (p: string) => p.replace(/^\/+/, '');
+
+        const fs = {
+          resolvePath: (p: string, base: BaseDir) => ({
+            baseDir: 0,
+            basePrefix: async () => 'data',
+            fp: p,
+            base,
+          }),
+          getURL: (p: string) => `blob:mock/${normalize(p)}`,
+          getBlobURL: async (p: string) => `blob:mock/${normalize(p)}`,
+          getImageURL: async (p: string) => `blob:mock/${normalize(p)}`,
+          openFile: async (p: string) => {
+            const data = storage.get(normalize(p)) || new Uint8Array();
+            return new File([data.buffer as ArrayBuffer], p.split('/').pop() || 'file');
+          },
+          copyFile: async (srcPath: string, _srcBase: BaseDir, dstPath: string) => {
+            const data = storage.get(normalize(srcPath));
+            if (data) {
+              storage.set(normalize(dstPath), new Uint8Array(data));
+            }
+          },
+          exists: async (p: string) => storage.has(normalize(p)),
+          readFile: async (p: string, _base: BaseDir, mode?: 'text' | 'binary') => {
+            const b = storage.get(normalize(p));
+            if (!b) throw new Error(`File not found: ${p}`);
+            if (mode === 'text') {
+              return new TextDecoder().decode(b);
+            }
+            return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+          },
+          writeFile: async (
+            p: string,
+            _base: BaseDir,
+            content: string | ArrayBuffer | Uint8Array | File,
+          ) => {
+            const key = normalize(p);
+            if (typeof content === 'string') {
+              storage.set(key, new TextEncoder().encode(content));
+            } else if (content instanceof Uint8Array) {
+              storage.set(key, content);
+            } else if (content instanceof ArrayBuffer) {
+              storage.set(key, new Uint8Array(content));
+            } else if (content instanceof File) {
+              const buf = await content.arrayBuffer();
+              storage.set(key, new Uint8Array(buf));
+            }
+          },
+          removeFile: async (p: string) => {
+            storage.delete(normalize(p));
+          },
+          deleteFile: async (p: string) => {
+            storage.delete(normalize(p));
+          },
+          remove: async (p: string) => {
+            storage.delete(normalize(p));
+          },
+          createDir: async () => {},
+          removeDir: async () => {},
+          readDir: async (dirPath: string) => {
+            const prefix = normalize(dirPath) ? `${normalize(dirPath)}/` : '';
+            const items: { name: string; isDir: boolean }[] = [];
+            for (const k of storage.keys()) {
+              if (k.startsWith(prefix)) {
+                const rest = k.slice(prefix.length);
+                const parts = rest.split('/');
+                items.push({ name: parts[0]!, isDir: parts.length > 1 });
+              }
+            }
+            return items;
+          },
+          stats: async () => ({ isFile: true, isDir: false, size: 0, mtime: Date.now() }),
+          getPrefix: async () => 'data',
+        };
+
+        return fs as unknown as import('@/types/system').FileSystem & {
+          deleteFile: (p: string, b: BaseDir) => Promise<void>;
+        };
+      }
+
+      // Create isolated storage filesystems for profile 1 and clean profile 2
+      const realFs1 = createIsolatedMemoryFileSystem();
+      const realFs2 = createIsolatedMemoryFileSystem();
       const baseDir: BaseDir = 'Data';
 
       const editionId = 'epub-edition-mac-roundtrip-33';
@@ -546,6 +624,7 @@ describe('Tauri WebView BookScore Validation', () => {
 
         // Reader location moves to cue B -> real crossfade / cue transition occurs
         store.reportLocation({ seq: 1, kind: 'resolved', cfi: 'epubcfi(/6/10!/4/2:0)' });
+        await new Promise((r) => setTimeout(r, 50));
         expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-b');
 
         expect(createdSources.length).toBe(2);
@@ -559,13 +638,14 @@ describe('Tauri WebView BookScore Validation', () => {
 
         // Step D: Induce real active-playback asset failure in installed profile & assert repair/silence recovery
         // Remove physical asset-a file from real disk storage
-        const assetPath = `soundtracks/${packageId}/${manifestHash}/audio/asset-a.mp3`;
+        const assetPath = getAssetFilePath(packageId, 'asset-a', manifestHash);
         await (
           realFs1 as unknown as { deleteFile: (p: string, b: string) => Promise<void> }
         ).deleteFile(assetPath, baseDir);
 
         // Move reader location back to cue-a to trigger active playback load of missing asset
         store.reportLocation({ seq: 2, kind: 'resolved', cfi: 'epubcfi(/6/2!/4/2:0)' });
+        await new Promise((r) => setTimeout(r, 50));
 
         // Playback MUST transition to silence-first recovery state
         expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
@@ -670,8 +750,6 @@ describe('Tauri WebView BookScore Validation', () => {
       } finally {
         await player.dispose();
         await realCtx.close();
-        await fsPromises.rm(tmpDir1, { recursive: true, force: true });
-        await fsPromises.rm(tmpDir2, { recursive: true, force: true });
       }
     });
   });
