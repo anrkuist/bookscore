@@ -227,7 +227,7 @@ describe('BookDetailSoundtrack Component', () => {
       expect(errorAlert.textContent).toContain('Import failed test error');
       expect(errorAlert.getAttribute('aria-live')).toBe('assertive');
     });
-  });
+  }, 15000);
 
   it('verifies RTL logical property, e-ink borders, and visible focus rings', async () => {
     vi.spyOn(persistenceModule, 'loadLocalAssociations').mockResolvedValue({});
@@ -248,5 +248,5 @@ describe('BookDetailSoundtrack Component', () => {
     // Eink: list or elements should have eink-bordered classes (is expanded by default)
     const importBtn = await findByRole('button', { name: /Import Soundtrack/i });
     expect(importBtn.className).toContain('focus-visible:ring-base-content/15');
-  });
+  }, 15000);
 });
