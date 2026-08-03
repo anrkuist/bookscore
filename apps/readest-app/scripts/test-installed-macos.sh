@@ -12,16 +12,18 @@ WEBDRIVER_PORT=4445
 TIMEOUT=180
 POLL_INTERVAL=3
 
-# Helper to locate built binary path across workspace structures
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${APP_DIR}/../.." && pwd)"
+
+# Deterministically locate built binary path at Cargo workspace target directory
 find_app_path() {
-  if [ -d "../target/debug/bundle/macos/Readest.app" ]; then
-    echo "../target/debug/bundle/macos/Readest.app"
-  elif [ -d "../../target/debug/bundle/macos/Readest.app" ]; then
-    echo "../../target/debug/bundle/macos/Readest.app"
-  elif [ -d "target/debug/bundle/macos/Readest.app" ]; then
-    echo "target/debug/bundle/macos/Readest.app"
+  if [ -d "${REPO_ROOT}/target/debug/bundle/macos/Readest.app" ]; then
+    echo "${REPO_ROOT}/target/debug/bundle/macos/Readest.app"
+  elif [ -d "${APP_DIR}/src-tauri/target/debug/bundle/macos/Readest.app" ]; then
+    echo "${APP_DIR}/src-tauri/target/debug/bundle/macos/Readest.app"
   else
-    echo "src-tauri/target/debug/bundle/macos/Readest.app"
+    echo "${REPO_ROOT}/target/debug/bundle/macos/Readest.app"
   fi
 }
 
