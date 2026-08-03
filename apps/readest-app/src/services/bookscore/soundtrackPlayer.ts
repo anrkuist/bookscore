@@ -182,6 +182,12 @@ export class WebAudioSoundtrackPlayer implements SoundtrackPlayer {
         const buffer = await ctx.decodeAudioData(audioData);
         (source as unknown as { buffer: unknown }).buffer = buffer;
       } catch (err) {
+        try {
+          source.disconnect();
+        } catch (_) {}
+        try {
+          newGain.disconnect();
+        } catch (_) {}
         await this.transitionToSilence();
         throw err;
       }

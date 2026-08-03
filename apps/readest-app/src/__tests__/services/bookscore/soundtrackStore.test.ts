@@ -511,7 +511,9 @@ describe('soundtrackStore issue #15 enhancements', () => {
       );
 
     // Call play with customFs so loadSoundtrackAssetFile is invoked and rejects
-    await useSoundtrackStore.getState().play(true, {} as any);
+    await useSoundtrackStore
+      .getState()
+      .play(true, {} as unknown as import('@/types/system').FileSystem);
 
     expect(dispatchSpy).not.toHaveBeenCalledWith('tts-stop', expect.anything());
     expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');

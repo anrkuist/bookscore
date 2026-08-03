@@ -82,6 +82,18 @@ The `invoke()` helper accesses `window.top.__TAURI_INTERNALS__` (Vitest runs in 
 
 **Limitations:** Only custom invoke commands and plugin commands listed in the webdriver capability work. Standard Tauri JS APIs (e.g. `@tauri-apps/api`) that rely on `URL: local` may not work from the Vitest iframe.
 
+### macOS Validation Harness (`pnpm test:macos:validation`)
+
+Runs a single bounded macOS validation harness outside the Next.js dev server to exercise BookScore Tauri IPC, MP3 Web Audio decode, audio cue loops, transitions, pause/resume offset retention, cleanup, and silence-first decode failures.
+
+```bash
+pnpm test:macos:validation    # Runs scripts/test-installed-macos.sh
+```
+
+- **Prerequisites:** macOS host environment, Rust + Tauri toolchain, `curl`, `lsof`, port `4445` available.
+- **Workflow:** Compiles a static Next.js frontend (`pnpm build`) and an unsigned macOS debug app with the `webdriver` feature (`tauri build --debug --features webdriver --bundles app --no-sign`), launches the compiled application binary, and runs `src/__tests__/tauri/bookscoreValidation.tauri.test.ts` via Vitest connected to port `4445`.
+- **Scope Note:** Exercises the compiled native shell with embedded W3C WebDriver capabilities. Tests execute within Vitest's remote iframe environment.
+
 ## Android Device E2E (`pnpm test:android`)
 
 Drives the **installed Readest app** on an adb-connected Android device or

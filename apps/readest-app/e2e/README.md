@@ -45,4 +45,7 @@ management, platform globals).
 ```bash
 pnpm tauri:dev:test        # start the Tauri app with the webdriver feature
 pnpm test:e2e              # run wdio against it (specs: e2e/*.e2e.ts)
+pnpm test:macos:validation # run single-command macOS validation harness (requires macOS, curl, lsof, port 4445 free)
 ```
+
+Note: `pnpm test:macos:validation` automatically builds an unsigned macOS debug binary (`--features webdriver --bundles app --no-sign`), launches the compiled application binary directly, and runs `src/__tests__/tauri/bookscoreValidation.tauri.test.ts` outside the dev server.
