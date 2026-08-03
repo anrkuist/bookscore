@@ -356,86 +356,47 @@ describe('Tauri WebView BookScore Validation', () => {
       const { partialMD5 } = await import('@/utils/md5');
       const { DocumentLoader } = await import('@/libs/document');
       const { computeBookNav } = await import('@/services/nav');
+      const { nativeFileSystem } = await import('@/services/nativeAppService');
       type BaseDir = import('@/types/system').BaseDir;
 
-      function createIsolatedMemoryFileSystem() {
-        const storage = new Map<string, Uint8Array>();
-        const normalize = (p: string) => p.replace(/^\/+/, '');
+      async function waitForCondition(
+        predicate: () => boolean | Promise<boolean>,
+        timeoutMs = 5000,
+        pollIntervalMs = 25,
+      ) {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+          if (await predicate()) return;
+          await new Promise((r) => setTimeout(r, pollIntervalMs));
+        }
+        if (!(await predicate())) {
+          throw new Error(`Timeout waiting for condition after ${timeoutMs}ms`);
+        }
+      }
 
-        const fs = {
-          resolvePath: (p: string, base: BaseDir) => ({
-            baseDir: 0,
-            basePrefix: async () => 'data',
-            fp: p,
-            base,
-          }),
-          getURL: (p: string) => `blob:mock/${normalize(p)}`,
-          getBlobURL: async (p: string) => `blob:mock/${normalize(p)}`,
-          getImageURL: async (p: string) => `blob:mock/${normalize(p)}`,
-          openFile: async (p: string) => {
-            const data = storage.get(normalize(p)) || new Uint8Array();
-            return new File([data.buffer as ArrayBuffer], p.split('/').pop() || 'file');
-          },
-          copyFile: async (srcPath: string, _srcBase: BaseDir, dstPath: string) => {
-            const data = storage.get(normalize(srcPath));
-            if (data) {
-              storage.set(normalize(dstPath), new Uint8Array(data));
-            }
-          },
-          exists: async (p: string) => storage.has(normalize(p)),
-          readFile: async (p: string, _base: BaseDir, mode?: 'text' | 'binary') => {
-            const b = storage.get(normalize(p));
-            if (!b) throw new Error(`File not found: ${p}`);
-            if (mode === 'text') {
-              return new TextDecoder().decode(b);
-            }
-            return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
-          },
-          writeFile: async (
-            p: string,
-            _base: BaseDir,
-            content: string | ArrayBuffer | Uint8Array | File,
-          ) => {
-            const key = normalize(p);
-            if (typeof content === 'string') {
-              storage.set(key, new TextEncoder().encode(content));
-            } else if (content instanceof Uint8Array) {
-              storage.set(key, content);
-            } else if (content instanceof ArrayBuffer) {
-              storage.set(key, new Uint8Array(content));
-            } else if (content instanceof File) {
-              const buf = await content.arrayBuffer();
-              storage.set(key, new Uint8Array(buf));
-            }
-          },
-          removeFile: async (p: string) => {
-            storage.delete(normalize(p));
-          },
-          deleteFile: async (p: string) => {
-            storage.delete(normalize(p));
-          },
-          remove: async (p: string) => {
-            storage.delete(normalize(p));
-          },
-          createDir: async () => {},
-          removeDir: async () => {},
-          readDir: async (dirPath: string) => {
-            const prefix = normalize(dirPath) ? `${normalize(dirPath)}/` : '';
-            const items: { name: string; isDir: boolean }[] = [];
-            for (const k of storage.keys()) {
-              if (k.startsWith(prefix)) {
-                const rest = k.slice(prefix.length);
-                const parts = rest.split('/');
-                items.push({ name: parts[0]!, isDir: parts.length > 1 });
-              }
-            }
-            return items;
-          },
-          stats: async () => ({ isFile: true, isDir: false, size: 0, mtime: Date.now() }),
-          getPrefix: async () => 'data',
-        };
+      function createScopedNativeFileSystem(profileName: string) {
+        const prefix = `bookscore_mac_prof_${profileName}`;
+        const withPrefix = (p: string) => (p ? `${prefix}/${p.replace(/^\/+/, '')}` : prefix);
 
-        return fs as unknown as import('@/types/system').FileSystem & {
+        return {
+          ...nativeFileSystem,
+          resolvePath: (p: string, base: BaseDir) =>
+            nativeFileSystem.resolvePath(withPrefix(p), base),
+          exists: (p: string, base: BaseDir) => nativeFileSystem.exists(withPrefix(p), base),
+          readFile: (p: string, base: BaseDir, mode: 'text' | 'binary') =>
+            nativeFileSystem.readFile(withPrefix(p), base, mode),
+          writeFile: (p: string, base: BaseDir, content: string | ArrayBuffer | File) =>
+            nativeFileSystem.writeFile(withPrefix(p), base, content),
+          removeFile: (p: string, base: BaseDir) =>
+            nativeFileSystem.removeFile(withPrefix(p), base),
+          deleteFile: (p: string, base: BaseDir) =>
+            nativeFileSystem.removeFile(withPrefix(p), base),
+          createDir: (p: string, base: BaseDir, recursive = true) =>
+            nativeFileSystem.createDir(withPrefix(p), base, recursive),
+          removeDir: (p: string, base: BaseDir, recursive = true) =>
+            nativeFileSystem.removeDir(withPrefix(p), base, recursive),
+          readDir: (p: string, base: BaseDir) => nativeFileSystem.readDir(withPrefix(p), base),
+        } as unknown as import('@/types/system').FileSystem & {
           deleteFile: (p: string, b: BaseDir) => Promise<void>;
         };
       }
@@ -459,10 +420,14 @@ describe('Tauri WebView BookScore Validation', () => {
       const cueACfi = sec0?.fragments[0]?.cfi || 'epubcfi(/6/2!/4/2:0)';
       const cueBCfi = sec1?.fragments[0]?.cfi || 'epubcfi(/6/10!/4/2:0)';
 
-      // Create isolated storage filesystems for profile 1 and clean profile 2
-      const realFs1 = createIsolatedMemoryFileSystem();
-      const realFs2 = createIsolatedMemoryFileSystem();
+      // Create real native Tauri app-data profile storage filesystems for profile 1 and clean profile 2
       const baseDir: BaseDir = 'Data';
+      const realFs1 = createScopedNativeFileSystem('1');
+      const realFs2 = createScopedNativeFileSystem('2');
+
+      // Clean any pre-existing directories for a fresh test run
+      await realFs1.removeDir('', baseDir, true).catch(() => {});
+      await realFs2.removeDir('', baseDir, true).catch(() => {});
 
       const packageId = 'pkg-mac-roundtrip-33';
       const mp3A = createMinimalValidMp3Bytes();
@@ -541,7 +506,7 @@ describe('Tauri WebView BookScore Validation', () => {
       const createdGains = getCreatedGains();
 
       try {
-        // Step B: Soundtrack attachment & Editable Copy creation
+        // Step B: Soundtrack attachment & Editable Copy creation on real Tauri native profile 1
         const importRes = await importAndAssociateBookScorePackage(
           realFs1,
           baseDir,
@@ -594,7 +559,11 @@ describe('Tauri WebView BookScore Validation', () => {
 
         // Reader location moves to cue B -> real crossfade / cue transition occurs
         store.reportLocation({ seq: 1, kind: 'resolved', cfi: cueBCfi });
-        await new Promise((r) => setTimeout(r, 50));
+        await waitForCondition(
+          () =>
+            useSoundtrackStore.getState().selectedCue?.id === 'cue-b' &&
+            createdSources.length === 2,
+        );
         expect(useSoundtrackStore.getState().selectedCue?.id).toBe('cue-b');
 
         expect(createdSources.length).toBe(2);
@@ -615,7 +584,7 @@ describe('Tauri WebView BookScore Validation', () => {
 
         // Move reader location back to cue-a to trigger active playback load of missing asset
         store.reportLocation({ seq: 2, kind: 'resolved', cfi: cueACfi });
-        await new Promise((r) => setTimeout(r, 50));
+        await waitForCondition(() => useSoundtrackStore.getState().playbackStatus === 'silence');
 
         // Playback MUST transition to silence-first recovery state
         expect(useSoundtrackStore.getState().playbackStatus).toBe('silence');
@@ -684,7 +653,7 @@ describe('Tauri WebView BookScore Validation', () => {
         if (!exportRes.success) return;
         expect(exportRes.archiveBytes).toBeDefined();
 
-        // Clean profile import (realFs2 starts empty)
+        // Clean profile import on real native profile 2 (realFs2)
         const cleanImportRes = await importAndAssociateBookScorePackage(
           realFs2,
           baseDir,
@@ -713,7 +682,7 @@ describe('Tauri WebView BookScore Validation', () => {
         if (!reattachRes.success || !reattachRes.association) return;
         expect(reattachRes.association.selected).toBe(true);
 
-        // Replay in clean profile
+        // Replay in clean profile 2
         store.resetSoundtrack();
         store.setCapabilityEnabled(true);
         store.registerSoundtrackPlayer(player);
