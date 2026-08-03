@@ -443,8 +443,8 @@ describe('Tauri WebView BookScore Validation', () => {
       const AudioCtx =
         window.AudioContext || (window as unknown as WebkitWindow).webkitAudioContext;
       const realCtx = new AudioCtx();
-      const createdSources: any[] = [];
-      const createdGains: any[] = [];
+      const createdSources: TrackedSource[] = [];
+      const createdGains: TrackedGain[] = [];
       const wrappedCtx = {
         state: realCtx.state,
         get currentTime() {
@@ -481,7 +481,9 @@ describe('Tauri WebView BookScore Validation', () => {
           return src;
         },
       };
-      const player = new WebAudioSoundtrackPlayer(wrappedCtx as any);
+      const player = new WebAudioSoundtrackPlayer(
+        wrappedCtx as unknown as ConstructorParameters<typeof WebAudioSoundtrackPlayer>[0],
+      );
 
       try {
         // Step A: EPUB import simulation & package creation
