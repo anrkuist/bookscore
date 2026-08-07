@@ -221,6 +221,39 @@ describe('SoundtrackControl & SoundtrackPanel (Issue #15)', () => {
     expect(verifiedBadge).toBeDefined();
   });
 
+  it('keeps panel pointer interactions out of the desktop window drag region (#42)', () => {
+    useSoundtrackStore.getState().setCapabilityEnabled(true);
+    useSoundtrackStore
+      .getState()
+      .loadSoundtrackForBook(
+        'edition-123',
+        { 'pkg-verified-1:hash-1': samplePkg },
+        { 'edition-123': sampleAssoc },
+      );
+    useSoundtrackStore.getState().setPanelOpen(true);
+
+    const { getByRole, getByLabelText } = render(
+      <div>
+        <SoundtrackPanel editionId='edition-123' isMobile={false} />
+      </div>,
+    );
+    const header = getByRole('dialog', { name: /soundtrack control panel/i }).parentElement!;
+    const startWindowDrag = vi.fn();
+    header.addEventListener('mousedown', startWindowDrag);
+    header.addEventListener('pointerdown', startWindowDrag);
+    header.addEventListener('pointermove', startWindowDrag);
+
+    const volumeSlider = getByLabelText(/soundtrack volume slider/i);
+    fireEvent.mouseDown(getByRole('dialog', { name: /soundtrack control panel/i }), { buttons: 1 });
+    fireEvent.mouseDown(volumeSlider, { buttons: 1 });
+    fireEvent.pointerDown(volumeSlider, { pointerType: 'mouse' });
+    fireEvent.pointerMove(volumeSlider, { pointerType: 'mouse' });
+    fireEvent.change(volumeSlider, { target: { value: '0.6' } });
+
+    expect(startWindowDrag).not.toHaveBeenCalled();
+    expect(useSoundtrackStore.getState().volume).toBe(0.6);
+  });
+
   it('switches to unverified candidate package with consent modal eink styling and keyboard independence', async () => {
     useSoundtrackStore.getState().setCapabilityEnabled(true);
     useSoundtrackStore
