@@ -582,6 +582,9 @@ export const SoundtrackPanel: React.FC<SoundtrackPanelProps> = ({
         role='dialog'
         aria-label={_('Soundtrack Control Panel')}
         aria-modal='true'
+        onMouseDownCapture={(event) => event.stopPropagation()}
+        onPointerDownCapture={(event) => event.stopPropagation()}
+        onPointerMoveCapture={(event) => event.stopPropagation()}
         className={clsx(
           'soundtrack-panel fixed top-0 end-0 z-40 h-full w-80 sm:w-96 bg-base-100 shadow-2xl',
           'border-s border-base-300 flex flex-col',
