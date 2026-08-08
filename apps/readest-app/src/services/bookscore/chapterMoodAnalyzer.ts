@@ -339,12 +339,39 @@ function verifyCanonicalRoundTrip(cfi: string, range: Range): boolean {
 function isValidChapterDocument(doc: unknown): doc is Document {
   if (!doc || typeof doc !== 'object') return false;
   const d = doc as Record<string, unknown>;
-  return (
-    d.nodeType === 9 &&
-    typeof d.createRange === 'function' &&
-    typeof d.createElement === 'function' &&
-    typeof d.createTreeWalker === 'function'
-  );
+  if (
+    d['nodeType'] !== 9 ||
+    d['nodeName'] !== '#document' ||
+    d['ownerDocument'] !== null ||
+    typeof d['createRange'] !== 'function' ||
+    typeof d['createElement'] !== 'function' ||
+    typeof d['createTreeWalker'] !== 'function'
+  ) {
+    return false;
+  }
+  const tag = Object.prototype.toString.call(doc);
+  if (!/^\[object .*Document\]$/.test(tag)) {
+    return false;
+  }
+  try {
+    const range = (d['createRange'] as () => unknown)();
+    if (!range || typeof range !== 'object') return false;
+    const r = range as Record<string, unknown>;
+    if (
+      typeof r['setStart'] !== 'function' ||
+      typeof r['compareBoundaryPoints'] !== 'function' ||
+      typeof r['cloneRange'] !== 'function'
+    ) {
+      return false;
+    }
+    const el = (d['createElement'] as (tag: string) => unknown)('div');
+    if (!el || typeof el !== 'object') return false;
+    const e = el as Record<string, unknown>;
+    if (e['nodeType'] !== 1) return false;
+  } catch {
+    return false;
+  }
+  return true;
 }
 
 function isBlockValid(
@@ -632,14 +659,31 @@ export class ChapterMoodAnalyzer {
       candidateBlocks = validCandidates;
     }
 
-    // Sort candidate blocks deterministically using canonical CFI comparison
-    candidateBlocks.sort((a, b) => {
-      const cmpStart = compareCanonicalCfi(a.block.startCfi, b.block.startCfi);
-      if (cmpStart !== null && cmpStart !== 0) return cmpStart;
-      const cmpEnd = compareCanonicalCfi(a.block.endCfi, b.block.endCfi);
-      if (cmpEnd !== null && cmpEnd !== 0) return cmpEnd;
-      return a.id.localeCompare(b.id);
-    });
+    // Sort candidate blocks deterministically using canonical CFI comparison (fail-closed)
+    try {
+      candidateBlocks.sort((a, b) => {
+        if (a.id === b.id) return 0;
+        const cmpStart = compareCanonicalCfi(a.block.startCfi, b.block.startCfi);
+        if (cmpStart === null) {
+          throw new Error(`Canonical CFI start sort comparison failed between ${a.id} and ${b.id}`);
+        }
+        if (cmpStart !== 0) return cmpStart;
+        const cmpEnd = compareCanonicalCfi(a.block.endCfi, b.block.endCfi);
+        if (cmpEnd === null) {
+          throw new Error(`Canonical CFI end sort comparison failed between ${a.id} and ${b.id}`);
+        }
+        if (cmpEnd !== 0) return cmpEnd;
+        return a.id.localeCompare(b.id);
+      });
+    } catch (err) {
+      for (const cand of candidateBlocks) {
+        rejectedCount++;
+        rejectionReasons.push(
+          `Block ${cand.id} rejected because canonical CFI sort failed closed: ${(err as Error).message}`,
+        );
+      }
+      candidateBlocks = [];
+    }
 
     const validProtectedRanges: ProtectedRange[] = [];
     for (let idx = 0; idx < protectedRanges.length; idx++) {

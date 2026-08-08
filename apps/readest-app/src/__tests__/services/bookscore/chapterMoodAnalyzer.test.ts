@@ -300,8 +300,23 @@ describe('ChapterMoodAnalyzer Milestone 1 & 2 Requirements (#53)', () => {
       const forgedDuckTyped = { createRange: () => ({}) } as unknown as Document;
       const forgedElementNode = { nodeType: 1, createRange: () => ({}) } as unknown as Document;
       const forgedPartialDoc = { nodeType: 9, createRange: () => ({}) } as unknown as Document;
+      const forgedCompleteFacade = {
+        nodeType: 9,
+        nodeName: '#document',
+        ownerDocument: null,
+        createRange: () => ({}),
+        createElement: () => ({}),
+        createTreeWalker: () => ({}),
+      } as unknown as Document;
 
-      for (const forgedDoc of [undefined, null, forgedDuckTyped, forgedElementNode, forgedPartialDoc]) {
+      for (const forgedDoc of [
+        undefined,
+        null,
+        forgedDuckTyped,
+        forgedElementNode,
+        forgedPartialDoc,
+        forgedCompleteFacade,
+      ]) {
         const inputWithBlocks: MoodAnalysisInput = {
           chapterId,
           spinePrefix,
