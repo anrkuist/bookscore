@@ -1,5 +1,4 @@
 import * as CFI from 'foliate-js/epubcfi.js';
-import { compareCfi, parseCfi } from './cfiUtils';
 import { getCfiSpinePrefix, isMalformedLocationCfi } from '@/utils/cfi';
 
 export interface MoodAnalysisBlock {
@@ -66,6 +65,8 @@ export interface MoodAnalysisDraft {
 export interface MoodAnalysisInput {
   chapterId: string;
   spinePrefix?: string;
+  /** The chapter DOM that originated these anchors. */
+  chapterDocument: Document;
   blocks: MoodAnalysisBlock[];
   protectedRanges?: ProtectedRange[];
   options?: MoodAnalysisOptions;
@@ -224,12 +225,12 @@ function roundScore(value: number): number {
   return Number(Math.max(0, Math.min(1, value)).toFixed(4));
 }
 
-function safeCompareCfi(cfiA: string, cfiB: string): number {
-  if (cfiA === cfiB) return 0;
+function compareCanonicalCfi(cfiA: string, cfiB: string): number | null {
+  if (!isValidCfi(cfiA) || !isValidCfi(cfiB)) return null;
   try {
     return CFI.compare(cfiA, cfiB);
   } catch {
-    return compareCfi(cfiA, cfiB);
+    return null;
   }
 }
 
@@ -244,20 +245,77 @@ function simpleStringHash(str: string): string {
 function isValidCfi(cfi: string | undefined | null): boolean {
   if (!cfi || typeof cfi !== 'string') return false;
   if (!cfi.startsWith('epubcfi(')) return false;
-  if (cfi.includes(',')) return false; // Block boundaries must be point CFIs
+  if (hasUnescapedRangeSeparator(cfi)) return false; // Block boundaries must be point CFIs
   if (isMalformedLocationCfi(cfi)) return false;
   try {
     CFI.parse(cfi);
-    const parsed = parseCfi(cfi);
-    return parsed.steps.length > 0;
+    return getCfiSpinePrefix(cfi) !== null;
   } catch {
     return false;
   }
 }
 
+function hasUnescapedRangeSeparator(cfi: string): boolean {
+  for (let index = 0; index < cfi.length; index++) {
+    if (cfi[index] !== ',') continue;
+    let escapes = 0;
+    for (let cursor = index - 1; cursor >= 0 && cfi[cursor] === '^'; cursor--) escapes++;
+    if (escapes % 2 === 0) return true;
+  }
+  return false;
+}
+
+function isInert(node: Node): boolean {
+  let current: Node | null = node.nodeType === Node.ELEMENT_NODE ? node : node.parentNode;
+  while (current) {
+    if (current.nodeType === Node.ELEMENT_NODE) {
+      const element = current as Element;
+      if (element.hasAttribute('cfi-inert') || element.classList.contains('cfi-inert')) return true;
+    }
+    current = current.parentNode;
+  }
+  return false;
+}
+
+function toChapterRange(doc: Document, cfi: string): Range | null {
+  const spinePrefix = getCfiSpinePrefix(cfi);
+  if (!spinePrefix) return null;
+  const prefix = `epubcfi(${spinePrefix}!`;
+  if (!cfi.startsWith(prefix)) return null;
+  const inner = cfi.slice(prefix.length, -1);
+  if (!inner) return null;
+  try {
+    return CFI.toRange(doc, CFI.parse(`epubcfi(${inner})`)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function isReadableRange(range: Range): boolean {
+  if (isInert(range.startContainer) || isInert(range.endContainer)) return false;
+  if (range.collapsed) {
+    return range.startContainer.nodeType === Node.TEXT_NODE && Boolean(range.startContainer.nodeValue?.trim());
+  }
+  const doc = range.commonAncestorContainer.ownerDocument;
+  if (!doc) return false;
+  const walker = doc.createTreeWalker(range.commonAncestorContainer, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (isInert(node) || !(node.nodeValue ?? '').trim()) return NodeFilter.FILTER_REJECT;
+      const nodeRange = range.cloneRange();
+      nodeRange.selectNodeContents(node);
+      return range.compareBoundaryPoints(Range.END_TO_START, nodeRange) < 0 &&
+        range.compareBoundaryPoints(Range.START_TO_END, nodeRange) > 0
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT;
+    },
+  });
+  return Boolean(walker.nextNode());
+}
+
 function isBlockValid(
-  block: MoodAnalysisBlock,
+  block: Pick<MoodAnalysisBlock, 'startCfi' | 'endCfi'>,
   expectedSpinePrefix?: string | null,
+  chapterDocument?: Document,
 ): { valid: boolean; reason?: string } {
   if (!isValidCfi(block.startCfi)) {
     return { valid: false, reason: 'Invalid or malformed startCfi' };
@@ -276,7 +334,11 @@ function isBlockValid(
     };
   }
 
-  if (safeCompareCfi(block.startCfi, block.endCfi) > 0) {
+  const comparison = compareCanonicalCfi(block.startCfi, block.endCfi);
+  if (comparison === null) {
+    return { valid: false, reason: 'Unable to canonically compare CFI range' };
+  }
+  if (comparison > 0) {
     return { valid: false, reason: 'Backwards CFI range (startCfi > endCfi)' };
   }
 
@@ -289,11 +351,23 @@ function isBlockValid(
     }
   }
 
+  if (!chapterDocument) return { valid: false, reason: 'Chapter document is required for CFI provenance' };
+  const startRange = toChapterRange(chapterDocument, block.startCfi);
+  const endRange = toChapterRange(chapterDocument, block.endCfi);
+  if (!startRange || !endRange) {
+    return { valid: false, reason: 'CFI does not resolve against chapter document' };
+  }
+  if (!isReadableRange(startRange) || !isReadableRange(endRange)) {
+    return { valid: false, reason: 'CFI resolves to inert or unreadable chapter content' };
+  }
+
   return { valid: true };
 }
 
 function rangesOverlap(startA: string, endA: string, startB: string, endB: string): boolean {
-  return safeCompareCfi(startA, endB) < 0 && safeCompareCfi(endA, startB) > 0;
+  const startToEnd = compareCanonicalCfi(startA, endB);
+  const endToStart = compareCanonicalCfi(endA, startB);
+  return startToEnd !== null && endToStart !== null && startToEnd < 0 && endToStart > 0;
 }
 
 function scoreText(text: string): {
@@ -373,9 +447,17 @@ export class ChapterMoodAnalyzer {
       errors.push('blocks must be an array');
     } else {
       input.blocks.forEach((b, idx) => {
-        const res = isBlockValid(b, input.spinePrefix);
+        const res = isBlockValid(b, input.spinePrefix, input.chapterDocument);
         if (!res.valid) {
           errors.push(`Block[${idx}] (id=${b.id ?? idx}): ${res.reason}`);
+        }
+      });
+    }
+    if (Array.isArray(input.protectedRanges)) {
+      input.protectedRanges.forEach((range, idx) => {
+        const res = isBlockValid(range, input.spinePrefix, input.chapterDocument);
+        if (!res.valid) {
+          errors.push(`ProtectedRange[${idx}] (id=${range.id ?? idx}): ${res.reason}`);
         }
       });
     }
@@ -411,7 +493,7 @@ export class ChapterMoodAnalyzer {
     // Filter valid blocks matching spine and anchor provenance
     for (let idx = 0; idx < rawBlocks.length; idx++) {
       const b = rawBlocks[idx]!;
-      const check = isBlockValid(b, spinePrefix);
+      const check = isBlockValid(b, spinePrefix, input.chapterDocument);
       if (!check.valid) {
         rejectedCount++;
         rejectionReasons.push(`Block[${idx}] ${check.reason}`);
@@ -423,12 +505,23 @@ export class ChapterMoodAnalyzer {
 
     // Sort candidate blocks deterministically using canonical CFI comparison
     candidateBlocks.sort((a, b) => {
-      const cmpStart = safeCompareCfi(a.block.startCfi, b.block.startCfi);
-      if (cmpStart !== 0) return cmpStart;
-      const cmpEnd = safeCompareCfi(a.block.endCfi, b.block.endCfi);
-      if (cmpEnd !== 0) return cmpEnd;
+      const cmpStart = compareCanonicalCfi(a.block.startCfi, b.block.startCfi);
+      if (cmpStart !== null && cmpStart !== 0) return cmpStart;
+      const cmpEnd = compareCanonicalCfi(a.block.endCfi, b.block.endCfi);
+      if (cmpEnd !== null && cmpEnd !== 0) return cmpEnd;
       return a.id.localeCompare(b.id);
     });
+
+    const validProtectedRanges: ProtectedRange[] = [];
+    for (let idx = 0; idx < protectedRanges.length; idx++) {
+      const range = protectedRanges[idx]!;
+      const check = isBlockValid(range, spinePrefix, input.chapterDocument);
+      if (!check.valid) {
+        rejectionReasons.push(`ProtectedRange[${idx}] ${check.reason}`);
+        continue;
+      }
+      validProtectedRanges.push(range);
+    }
 
     // Partition and reject overlapping blocks deterministically
     const nonOverlappingBlocks: Array<{
@@ -458,7 +551,7 @@ export class ChapterMoodAnalyzer {
       }
 
       // Check Protected Range intersection
-      const isProt = protectedRanges.some((p) =>
+      const isProt = validProtectedRanges.some((p) =>
         rangesOverlap(block.startCfi, block.endCfi, p.startCfi, p.endCfi),
       );
 
