@@ -335,6 +335,7 @@ describe('Tauri WebView BookScore Validation', () => {
   });
 
   // 3. Installed-Style macOS BookScore Reader Round-Trip Suite (#33)
+  // Recovered from authoritative commits d7e4e4cad374270025b02af1ec0f481c3ef4ba52 and e9af9b7d61730314ea4e2960f838a4c52c2dabd3
   describe('Installed-Style macOS Reader Round-Trip Journey', () => {
     it('executes full installed-style macOS reader lifecycle from EPUB import to replay', async () => {
       const {
