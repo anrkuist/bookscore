@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import * as CFI from 'foliate-js/epubcfi.js';
 import {
   ChapterMoodAnalyzer,
@@ -103,9 +103,17 @@ describe('ChapterMoodAnalyzer Milestone 1 & 2 Requirements (#53)', () => {
             endCfi,
           },
         ],
-      });
+      };
 
+      const validation = validateMoodAnalysisInput(input);
+      expect(validation.valid).toBe(true);
+
+      const draft = analyzeChapterMood(input);
       expect(draft.quality.acceptedBlocks).toBe(1);
+      expect(draft.quality.rejectedBlocks).toBe(0);
+      expect(draft.segments).toHaveLength(1);
+      expect(draft.segments[0]!.startCfi).toBe(startCfi);
+      expect(draft.segments[0]!.endCfi).toBe(endCfi);
     });
 
     it('rejects unresolved and cfi-inert anchors before segmentation', () => {
@@ -283,7 +291,134 @@ describe('ChapterMoodAnalyzer Milestone 1 & 2 Requirements (#53)', () => {
       expect(draft.quality.acceptedBlocks).toBe(1);
       expect(draft.quality.protectedExclusions).toBe(0);
       expect(draft.segments[0]?.isProtected).toBe(false);
-      expect(draft.quality.reasons.filter((reason) => reason.startsWith('ProtectedRange')).length).toBe(3);
+      expect(
+        draft.quality.reasons.filter((reason) => reason.startsWith('ProtectedRange')).length,
+      ).toBe(3);
+    });
+
+    it('rejects absent or non-Document DOMs before analysis at public boundary', () => {
+      const inputNoDoc = {
+        chapterId,
+        spinePrefix,
+        blocks: [
+          {
+            id: 'b1',
+            text: 'Content without DOM',
+            startCfi: 'epubcfi(/6/4!/4/2/1:0)',
+            endCfi: 'epubcfi(/6/4!/4/2/1:30)',
+          },
+        ],
+      } as unknown as MoodAnalysisInput;
+
+      const valNoDoc = validateMoodAnalysisInput(inputNoDoc);
+      expect(valNoDoc.valid).toBe(false);
+      expect(valNoDoc.errors.some((e) => e.includes('chapterDocument is required'))).toBe(true);
+
+      const draftNoDoc = analyzeChapterMood(inputNoDoc);
+      expect(draftNoDoc.quality.disposition).toBe('rejected');
+      expect(
+        draftNoDoc.quality.reasons.some((r) => r.includes('chapterDocument is required')),
+      ).toBe(true);
+
+      const inputEmptyNoDoc = {
+        chapterId,
+        spinePrefix,
+        blocks: [],
+      } as unknown as MoodAnalysisInput;
+      const valEmptyNoDoc = validateMoodAnalysisInput(inputEmptyNoDoc);
+      expect(valEmptyNoDoc.valid).toBe(false);
+
+      const draftEmptyNoDoc = analyzeChapterMood(inputEmptyNoDoc);
+      expect(draftEmptyNoDoc.quality.disposition).toBe('rejected');
+    });
+
+    it('fails closed when canonical CFI comparison between blocks or protected ranges is unavailable', () => {
+      const input: MoodAnalysisInput = {
+        chapterId,
+        spinePrefix,
+        chapterDocument,
+        blocks: [
+          {
+            id: 'b1',
+            text: 'The shadows crept silently across the hallway.',
+            startCfi: pointCfi('a^,b', 0),
+            endCfi: pointCfi('a^,b', 10),
+          },
+          {
+            id: 'b2-fail-comp',
+            text: 'The sudden threat brought fear and alarm.',
+            startCfi: pointCfi('a^,b', 12),
+            endCfi: pointCfi('a^,b', 20),
+          },
+        ],
+      };
+
+      const originalCompare = CFI.compare;
+      const compareSpy = vi.spyOn(CFI, 'compare').mockImplementation((a: string, b: string) => {
+        if (
+          (a === pointCfi('a^,b', 0) && b === pointCfi('a^,b', 20)) ||
+          (a === pointCfi('a^,b', 12) && b === pointCfi('a^,b', 10))
+        ) {
+          throw new Error('Forced CFI compare failure');
+        }
+        return originalCompare(a, b);
+      });
+
+      try {
+        const draft = analyzeChapterMood(input);
+        expect(draft.quality.acceptedBlocks).toBe(1);
+        expect(draft.quality.rejectedBlocks).toBe(1);
+        expect(draft.quality.reasons.some((r) => r.includes('failed or was unavailable'))).toBe(
+          true,
+        );
+      } finally {
+        compareSpy.mockRestore();
+      }
+    });
+
+    it('fails closed and excludes candidate block as protected when Protected Range comparison fails', () => {
+      const input: MoodAnalysisInput = {
+        chapterId,
+        spinePrefix,
+        chapterDocument,
+        blocks: [
+          {
+            id: 'b1',
+            text: 'Block near protected range',
+            startCfi: pointCfi('a^,b', 0),
+            endCfi: pointCfi('a^,b', 10),
+          },
+        ],
+        protectedRanges: [
+          {
+            id: 'prot-1',
+            startCfi: pointCfi('a^,b', 12),
+            endCfi: pointCfi('a^,b', 20),
+          },
+        ],
+      };
+
+      const originalCompare = CFI.compare;
+      const compareSpy = vi.spyOn(CFI, 'compare').mockImplementation((a: string, b: string) => {
+        if (
+          (a === pointCfi('a^,b', 0) && b === pointCfi('a^,b', 20)) ||
+          (a === pointCfi('a^,b', 10) && b === pointCfi('a^,b', 12))
+        ) {
+          throw new Error('Forced Protected Range compare failure');
+        }
+        return originalCompare(a, b);
+      });
+
+      try {
+        const draft = analyzeChapterMood(input);
+        expect(draft.quality.protectedExclusions).toBe(1);
+        expect(draft.segments[0]?.isProtected).toBe(true);
+        expect(
+          draft.quality.reasons.some((r) => r.includes('conservatively excluded as protected')),
+        ).toBe(true);
+      } finally {
+        compareSpy.mockRestore();
+      }
     });
   });
 

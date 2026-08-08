@@ -294,7 +294,10 @@ function toChapterRange(doc: Document, cfi: string): Range | null {
 function isReadableRange(range: Range): boolean {
   if (isInert(range.startContainer) || isInert(range.endContainer)) return false;
   if (range.collapsed) {
-    return range.startContainer.nodeType === Node.TEXT_NODE && Boolean(range.startContainer.nodeValue?.trim());
+    return (
+      range.startContainer.nodeType === Node.TEXT_NODE &&
+      Boolean(range.startContainer.nodeValue?.trim())
+    );
   }
   const doc = range.commonAncestorContainer.ownerDocument;
   if (!doc) return false;
@@ -310,6 +313,27 @@ function isReadableRange(range: Range): boolean {
     },
   });
   return Boolean(walker.nextNode());
+}
+
+function verifyCanonicalRoundTrip(cfi: string, range: Range): boolean {
+  const spinePrefix = getCfiSpinePrefix(cfi);
+  if (!spinePrefix) return false;
+  try {
+    const regeneratedInner = CFI.fromRange(range);
+    if (
+      !regeneratedInner ||
+      typeof regeneratedInner !== 'string' ||
+      !regeneratedInner.startsWith('epubcfi(')
+    ) {
+      return false;
+    }
+    const innerCfi = regeneratedInner.slice('epubcfi('.length, -1);
+    const regeneratedCfi = `epubcfi(${spinePrefix}!${innerCfi})`;
+    const cmp = compareCanonicalCfi(regeneratedCfi, cfi);
+    return cmp === 0;
+  } catch {
+    return false;
+  }
 }
 
 function isBlockValid(
@@ -351,11 +375,29 @@ function isBlockValid(
     }
   }
 
-  if (!chapterDocument) return { valid: false, reason: 'Chapter document is required for CFI provenance' };
+  if (
+    !chapterDocument ||
+    typeof chapterDocument !== 'object' ||
+    typeof (chapterDocument as unknown as { createRange?: unknown }).createRange !== 'function'
+  ) {
+    return { valid: false, reason: 'chapterDocument is required and must be a valid Document' };
+  }
   const startRange = toChapterRange(chapterDocument, block.startCfi);
   const endRange = toChapterRange(chapterDocument, block.endCfi);
   if (!startRange || !endRange) {
     return { valid: false, reason: 'CFI does not resolve against chapter document' };
+  }
+  if (!verifyCanonicalRoundTrip(block.startCfi, startRange)) {
+    return {
+      valid: false,
+      reason: 'startCfi does not canonically round-trip from resolved chapter DOM range',
+    };
+  }
+  if (!verifyCanonicalRoundTrip(block.endCfi, endRange)) {
+    return {
+      valid: false,
+      reason: 'endCfi does not canonically round-trip from resolved chapter DOM range',
+    };
   }
   if (!isReadableRange(startRange) || !isReadableRange(endRange)) {
     return { valid: false, reason: 'CFI resolves to inert or unreadable chapter content' };
@@ -364,10 +406,21 @@ function isBlockValid(
   return { valid: true };
 }
 
-function rangesOverlap(startA: string, endA: string, startB: string, endB: string): boolean {
+function rangesOverlap(
+  startA: string,
+  endA: string,
+  startB: string,
+  endB: string,
+): { overlaps: boolean; comparisonFailed: boolean } {
   const startToEnd = compareCanonicalCfi(startA, endB);
   const endToStart = compareCanonicalCfi(endA, startB);
-  return startToEnd !== null && endToStart !== null && startToEnd < 0 && endToStart > 0;
+  if (startToEnd === null || endToStart === null) {
+    return { overlaps: true, comparisonFailed: true };
+  }
+  return {
+    overlaps: startToEnd < 0 && endToStart > 0,
+    comparisonFailed: false,
+  };
 }
 
 function scoreText(text: string): {
@@ -443,6 +496,14 @@ export class ChapterMoodAnalyzer {
     if (!input.chapterId || typeof input.chapterId !== 'string') {
       errors.push('chapterId is required and must be a string');
     }
+    if (
+      !input.chapterDocument ||
+      typeof input.chapterDocument !== 'object' ||
+      typeof (input.chapterDocument as unknown as { createRange?: unknown }).createRange !==
+        'function'
+    ) {
+      errors.push('chapterDocument is required and must be a valid Document');
+    }
     if (!Array.isArray(input.blocks)) {
       errors.push('blocks must be an array');
     } else {
@@ -484,6 +545,41 @@ export class ChapterMoodAnalyzer {
           break;
         }
       }
+    }
+
+    const hasValidDoc =
+      Boolean(input.chapterDocument) &&
+      typeof input.chapterDocument === 'object' &&
+      typeof (input.chapterDocument as unknown as { createRange?: unknown }).createRange ===
+        'function';
+
+    if (!hasValidDoc) {
+      const seedString = `${input.chapterId}:${spinePrefix}:${rawBlocks.length}:${timestamp}`;
+      const draftHash = simpleStringHash(seedString);
+      const overallScores: Record<string, number> = {};
+      for (const mood of CANONICAL_MOODS) {
+        overallScores[mood] = mood === fallbackMood ? 1 : 0;
+      }
+      return {
+        draftId: `draft-${input.chapterId}-${draftHash}`,
+        chapterId: input.chapterId,
+        spinePrefix,
+        primaryMood: fallbackMood,
+        overallScores,
+        segments: [],
+        quality: {
+          totalBlocks: rawBlocks.length,
+          acceptedBlocks: 0,
+          rejectedBlocks: rawBlocks.length,
+          coverageRatio: 0,
+          hasFallback: true,
+          protectedExclusions: 0,
+          disposition: 'rejected',
+          reasons: ['chapterDocument is required and must be a valid Document'],
+        },
+        createdAt: timestamp,
+        isIsolated: true,
+      };
     }
 
     const candidateBlocks: Array<{ block: MoodAnalysisBlock; id: string }> = [];
@@ -536,24 +632,42 @@ export class ChapterMoodAnalyzer {
 
       // Check overlap with previously accepted block
       const lastAccepted = nonOverlappingBlocks.at(-1);
-      if (
-        lastAccepted &&
-        rangesOverlap(
+      if (lastAccepted) {
+        const overlapCheck = rangesOverlap(
           block.startCfi,
           block.endCfi,
           lastAccepted.block.startCfi,
           lastAccepted.block.endCfi,
-        )
-      ) {
-        rejectedCount++;
-        rejectionReasons.push(`Block ${id} overlaps with prior accepted block ${lastAccepted.id}`);
-        continue;
+        );
+        if (overlapCheck.overlaps || overlapCheck.comparisonFailed) {
+          rejectedCount++;
+          if (overlapCheck.comparisonFailed) {
+            rejectionReasons.push(
+              `Block ${id} rejected because canonical CFI comparison against block ${lastAccepted.id} failed or was unavailable`,
+            );
+          } else {
+            rejectionReasons.push(
+              `Block ${id} overlaps with prior accepted block ${lastAccepted.id}`,
+            );
+          }
+          continue;
+        }
       }
 
-      // Check Protected Range intersection
-      const isProt = validProtectedRanges.some((p) =>
-        rangesOverlap(block.startCfi, block.endCfi, p.startCfi, p.endCfi),
-      );
+      // Check Protected Range intersection (conservatively treat comparison failure as protected)
+      let isProt = false;
+      for (const p of validProtectedRanges) {
+        const protCheck = rangesOverlap(block.startCfi, block.endCfi, p.startCfi, p.endCfi);
+        if (protCheck.overlaps || protCheck.comparisonFailed) {
+          isProt = true;
+          if (protCheck.comparisonFailed) {
+            rejectionReasons.push(
+              `Block ${id} conservatively excluded as protected because canonical CFI comparison against Protected Range ${p.id ?? 'unnamed'} failed or was unavailable`,
+            );
+          }
+          break;
+        }
+      }
 
       if (isProt) {
         protectedExclusionsCount++;
