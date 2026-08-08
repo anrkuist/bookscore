@@ -296,40 +296,155 @@ describe('ChapterMoodAnalyzer Milestone 1 & 2 Requirements (#53)', () => {
       ).toBe(3);
     });
 
-    it('rejects absent or non-Document DOMs before analysis at public boundary', () => {
-      const inputNoDoc = {
+    it('rejects absent, forged, or non-Document DOMs before analysis across public boundary', () => {
+      const forgedDuckTyped = { createRange: () => ({}) } as unknown as Document;
+      const forgedElementNode = { nodeType: 1, createRange: () => ({}) } as unknown as Document;
+      const forgedPartialDoc = { nodeType: 9, createRange: () => ({}) } as unknown as Document;
+
+      for (const forgedDoc of [undefined, null, forgedDuckTyped, forgedElementNode, forgedPartialDoc]) {
+        const inputWithBlocks: MoodAnalysisInput = {
+          chapterId,
+          spinePrefix,
+          chapterDocument: forgedDoc as Document,
+          blocks: [
+            {
+              id: 'b1',
+              text: 'Content with invalid doc',
+              startCfi: pointCfi('a^,b', 0),
+              endCfi: pointCfi('a^,b', 10),
+            },
+          ],
+        };
+        expect(validateMoodAnalysisInput(inputWithBlocks).valid).toBe(false);
+        const draftBlocks = analyzeChapterMood(inputWithBlocks);
+        expect(draftBlocks.quality.disposition).toBe('rejected');
+        expect(
+          draftBlocks.quality.reasons.some((r) => r.includes('chapterDocument is required')),
+        ).toBe(true);
+
+        const inputEmpty: MoodAnalysisInput = {
+          chapterId,
+          spinePrefix,
+          chapterDocument: forgedDoc as Document,
+          blocks: [],
+        };
+        expect(validateMoodAnalysisInput(inputEmpty).valid).toBe(false);
+        const draftEmpty = analyzeChapterMood(inputEmpty);
+        expect(draftEmpty.quality.disposition).toBe('rejected');
+
+        const inputProtectedOnly: MoodAnalysisInput = {
+          chapterId,
+          spinePrefix,
+          chapterDocument: forgedDoc as Document,
+          blocks: [],
+          protectedRanges: [
+            {
+              id: 'p1',
+              startCfi: pointCfi('a^,b', 0),
+              endCfi: pointCfi('a^,b', 10),
+            },
+          ],
+        };
+        expect(validateMoodAnalysisInput(inputProtectedOnly).valid).toBe(false);
+        const draftProtected = analyzeChapterMood(inputProtectedOnly);
+        expect(draftProtected.quality.disposition).toBe('rejected');
+      }
+    });
+
+    it('fails closed when candidate start/start canonical sort comparison fails', () => {
+      const input: MoodAnalysisInput = {
         chapterId,
         spinePrefix,
+        chapterDocument,
         blocks: [
           {
-            id: 'b1',
-            text: 'Content without DOM',
-            startCfi: 'epubcfi(/6/4!/4/2/1:0)',
-            endCfi: 'epubcfi(/6/4!/4/2/1:30)',
+            id: 'b1-sort-fail',
+            text: 'First block text',
+            startCfi: pointCfi('a^,b', 0),
+            endCfi: pointCfi('a^,b', 10),
+          },
+          {
+            id: 'b2-sort-fail',
+            text: 'Second block text',
+            startCfi: pointCfi('a^,b', 12),
+            endCfi: pointCfi('a^,b', 20),
           },
         ],
-      } as unknown as MoodAnalysisInput;
+      };
 
-      const valNoDoc = validateMoodAnalysisInput(inputNoDoc);
-      expect(valNoDoc.valid).toBe(false);
-      expect(valNoDoc.errors.some((e) => e.includes('chapterDocument is required'))).toBe(true);
+      const originalCompare = CFI.compare;
+      const compareSpy = vi.spyOn(CFI, 'compare').mockImplementation((a: string, b: string) => {
+        if (
+          (a === pointCfi('a^,b', 0) && b === pointCfi('a^,b', 12)) ||
+          (a === pointCfi('a^,b', 12) && b === pointCfi('a^,b', 0))
+        ) {
+          throw new Error('Forced start/start sort comparison failure');
+        }
+        return originalCompare(a, b);
+      });
 
-      const draftNoDoc = analyzeChapterMood(inputNoDoc);
-      expect(draftNoDoc.quality.disposition).toBe('rejected');
-      expect(
-        draftNoDoc.quality.reasons.some((r) => r.includes('chapterDocument is required')),
-      ).toBe(true);
+      try {
+        const draft = analyzeChapterMood(input);
+        expect(draft.quality.acceptedBlocks).toBe(0);
+        expect(draft.quality.rejectedBlocks).toBe(2);
+        expect(draft.quality.hasFallback).toBe(true);
+        expect(draft.quality.disposition).toBe('rejected');
+        expect(
+          draft.quality.reasons.some((r) =>
+            r.includes('CFI sort comparison against candidate blocks failed'),
+          ),
+        ).toBe(true);
+      } finally {
+        compareSpy.mockRestore();
+      }
+    });
 
-      const inputEmptyNoDoc = {
+    it('fails closed when candidate end/end canonical sort comparison fails for matching start CFIs', () => {
+      const input: MoodAnalysisInput = {
         chapterId,
         spinePrefix,
-        blocks: [],
-      } as unknown as MoodAnalysisInput;
-      const valEmptyNoDoc = validateMoodAnalysisInput(inputEmptyNoDoc);
-      expect(valEmptyNoDoc.valid).toBe(false);
+        chapterDocument,
+        blocks: [
+          {
+            id: 'b1-same-start',
+            text: 'First block with same start',
+            startCfi: pointCfi('a^,b', 0),
+            endCfi: pointCfi('a^,b', 10),
+          },
+          {
+            id: 'b2-same-start',
+            text: 'Second block with same start',
+            startCfi: pointCfi('a^,b', 0),
+            endCfi: pointCfi('a^,b', 20),
+          },
+        ],
+      };
 
-      const draftEmptyNoDoc = analyzeChapterMood(inputEmptyNoDoc);
-      expect(draftEmptyNoDoc.quality.disposition).toBe('rejected');
+      const originalCompare = CFI.compare;
+      const compareSpy = vi.spyOn(CFI, 'compare').mockImplementation((a: string, b: string) => {
+        if (
+          (a === pointCfi('a^,b', 10) && b === pointCfi('a^,b', 20)) ||
+          (a === pointCfi('a^,b', 20) && b === pointCfi('a^,b', 10))
+        ) {
+          throw new Error('Forced end/end sort comparison failure');
+        }
+        return originalCompare(a, b);
+      });
+
+      try {
+        const draft = analyzeChapterMood(input);
+        expect(draft.quality.acceptedBlocks).toBe(0);
+        expect(draft.quality.rejectedBlocks).toBe(2);
+        expect(draft.quality.hasFallback).toBe(true);
+        expect(draft.quality.disposition).toBe('rejected');
+        expect(
+          draft.quality.reasons.some((r) =>
+            r.includes('CFI sort comparison against candidate blocks failed'),
+          ),
+        ).toBe(true);
+      } finally {
+        compareSpy.mockRestore();
+      }
     });
 
     it('fails closed when canonical CFI comparison between blocks or protected ranges is unavailable', () => {

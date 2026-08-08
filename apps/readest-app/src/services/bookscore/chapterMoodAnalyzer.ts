@@ -336,6 +336,17 @@ function verifyCanonicalRoundTrip(cfi: string, range: Range): boolean {
   }
 }
 
+function isValidChapterDocument(doc: unknown): doc is Document {
+  if (!doc || typeof doc !== 'object') return false;
+  const d = doc as Record<string, unknown>;
+  return (
+    d.nodeType === 9 &&
+    typeof d.createRange === 'function' &&
+    typeof d.createElement === 'function' &&
+    typeof d.createTreeWalker === 'function'
+  );
+}
+
 function isBlockValid(
   block: Pick<MoodAnalysisBlock, 'startCfi' | 'endCfi'>,
   expectedSpinePrefix?: string | null,
@@ -375,11 +386,7 @@ function isBlockValid(
     }
   }
 
-  if (
-    !chapterDocument ||
-    typeof chapterDocument !== 'object' ||
-    typeof (chapterDocument as unknown as { createRange?: unknown }).createRange !== 'function'
-  ) {
+  if (!isValidChapterDocument(chapterDocument)) {
     return { valid: false, reason: 'chapterDocument is required and must be a valid Document' };
   }
   const startRange = toChapterRange(chapterDocument, block.startCfi);
@@ -496,12 +503,7 @@ export class ChapterMoodAnalyzer {
     if (!input.chapterId || typeof input.chapterId !== 'string') {
       errors.push('chapterId is required and must be a string');
     }
-    if (
-      !input.chapterDocument ||
-      typeof input.chapterDocument !== 'object' ||
-      typeof (input.chapterDocument as unknown as { createRange?: unknown }).createRange !==
-        'function'
-    ) {
+    if (!isValidChapterDocument(input.chapterDocument)) {
       errors.push('chapterDocument is required and must be a valid Document');
     }
     if (!Array.isArray(input.blocks)) {
@@ -547,13 +549,7 @@ export class ChapterMoodAnalyzer {
       }
     }
 
-    const hasValidDoc =
-      Boolean(input.chapterDocument) &&
-      typeof input.chapterDocument === 'object' &&
-      typeof (input.chapterDocument as unknown as { createRange?: unknown }).createRange ===
-        'function';
-
-    if (!hasValidDoc) {
+    if (!isValidChapterDocument(input.chapterDocument)) {
       const seedString = `${input.chapterId}:${spinePrefix}:${rawBlocks.length}:${timestamp}`;
       const draftHash = simpleStringHash(seedString);
       const overallScores: Record<string, number> = {};
@@ -582,7 +578,7 @@ export class ChapterMoodAnalyzer {
       };
     }
 
-    const candidateBlocks: Array<{ block: MoodAnalysisBlock; id: string }> = [];
+    let candidateBlocks: Array<{ block: MoodAnalysisBlock; id: string }> = [];
     let rejectedCount = 0;
     const rejectionReasons: string[] = [];
 
@@ -597,6 +593,43 @@ export class ChapterMoodAnalyzer {
       }
       const id = b.id ?? `blk-${idx}-${b.startCfi}`;
       candidateBlocks.push({ block: b, id });
+    }
+
+    // Fail closed on candidate block sort comparisons if canonical start or end comparison is unavailable
+    const sortFailedBlockIds = new Set<string>();
+    for (let i = 0; i < candidateBlocks.length; i++) {
+      for (let j = i + 1; j < candidateBlocks.length; j++) {
+        const a = candidateBlocks[i]!;
+        const b = candidateBlocks[j]!;
+        const cmpStart = compareCanonicalCfi(a.block.startCfi, b.block.startCfi);
+        if (cmpStart === null) {
+          sortFailedBlockIds.add(a.id);
+          sortFailedBlockIds.add(b.id);
+          continue;
+        }
+        if (cmpStart === 0) {
+          const cmpEnd = compareCanonicalCfi(a.block.endCfi, b.block.endCfi);
+          if (cmpEnd === null) {
+            sortFailedBlockIds.add(a.id);
+            sortFailedBlockIds.add(b.id);
+          }
+        }
+      }
+    }
+
+    if (sortFailedBlockIds.size > 0) {
+      const validCandidates: Array<{ block: MoodAnalysisBlock; id: string }> = [];
+      for (const cand of candidateBlocks) {
+        if (sortFailedBlockIds.has(cand.id)) {
+          rejectedCount++;
+          rejectionReasons.push(
+            `Block ${cand.id} rejected because canonical CFI sort comparison against candidate blocks failed or was unavailable`,
+          );
+        } else {
+          validCandidates.push(cand);
+        }
+      }
+      candidateBlocks = validCandidates;
     }
 
     // Sort candidate blocks deterministically using canonical CFI comparison
