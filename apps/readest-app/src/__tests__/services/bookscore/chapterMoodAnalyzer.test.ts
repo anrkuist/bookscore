@@ -308,6 +308,21 @@ describe('ChapterMoodAnalyzer Milestone 1 & 2 Requirements (#53)', () => {
         createElement: () => ({}),
         createTreeWalker: () => ({}),
       } as unknown as Document;
+      const forgedBrandedFacade = {
+        nodeType: 9,
+        nodeName: '#document',
+        ownerDocument: null,
+        [Symbol.toStringTag]: 'HTMLDocument',
+        createElement: () => ({ nodeType: 1 }),
+        createTextNode: () => ({ nodeType: 3 }),
+        createRange: () => ({
+          setStart: () => {},
+          compareBoundaryPoints: () => 0,
+          cloneRange: () => ({}),
+          selectNodeContents: () => {},
+        }),
+        createTreeWalker: () => ({ nextNode: () => null }),
+      } as unknown as Document;
 
       for (const forgedDoc of [
         undefined,
@@ -316,6 +331,7 @@ describe('ChapterMoodAnalyzer Milestone 1 & 2 Requirements (#53)', () => {
         forgedElementNode,
         forgedPartialDoc,
         forgedCompleteFacade,
+        forgedBrandedFacade,
       ]) {
         const inputWithBlocks: MoodAnalysisInput = {
           chapterId,
@@ -364,6 +380,35 @@ describe('ChapterMoodAnalyzer Milestone 1 & 2 Requirements (#53)', () => {
         const draftProtected = analyzeChapterMood(inputProtectedOnly);
         expect(draftProtected.quality.disposition).toBe('rejected');
       }
+    });
+
+    it('rejects duplicate supplied block IDs and orders candidates by canonical CFI before ID tie-break', () => {
+      const inputDuplicateIds: MoodAnalysisInput = {
+        chapterId,
+        spinePrefix,
+        chapterDocument,
+        blocks: [
+          {
+            id: 'dup-id',
+            text: 'First block with duplicate id',
+            startCfi: pointCfi('a^,b', 0),
+            endCfi: pointCfi('a^,b', 10),
+          },
+          {
+            id: 'dup-id',
+            text: 'Second block with duplicate id',
+            startCfi: pointCfi('a^,b', 12),
+            endCfi: pointCfi('a^,b', 20),
+          },
+        ],
+      };
+
+      const draftDup = analyzeChapterMood(inputDuplicateIds);
+      expect(draftDup.quality.acceptedBlocks).toBe(1);
+      expect(draftDup.quality.rejectedBlocks).toBe(1);
+      expect(draftDup.quality.reasons.some((r) => r.includes("Duplicate block id 'dup-id'"))).toBe(
+        true,
+      );
     });
 
     it('fails closed when candidate start/start canonical sort comparison fails', () => {

@@ -345,6 +345,7 @@ function isValidChapterDocument(doc: unknown): doc is Document {
     d['ownerDocument'] !== null ||
     typeof d['createRange'] !== 'function' ||
     typeof d['createElement'] !== 'function' ||
+    typeof d['createTextNode'] !== 'function' ||
     typeof d['createTreeWalker'] !== 'function'
   ) {
     return false;
@@ -354,20 +355,40 @@ function isValidChapterDocument(doc: unknown): doc is Document {
     return false;
   }
   try {
+    const el = (d['createElement'] as (tag: string) => unknown)('div');
+    if (!el || typeof el !== 'object') return false;
+    const e = el as Record<string, unknown>;
+    if (e['nodeType'] !== 1 || e['ownerDocument'] !== doc) return false;
+
+    const textNode = (d['createTextNode'] as (text: string) => unknown)('x');
+    if (!textNode || typeof textNode !== 'object') return false;
+    const t = textNode as Record<string, unknown>;
+    if (t['nodeType'] !== 3 || t['ownerDocument'] !== doc) return false;
+
+    (e['appendChild'] as (node: unknown) => unknown)(textNode);
+    if (t['parentNode'] !== el || e['firstChild'] !== textNode) return false;
+
     const range = (d['createRange'] as () => unknown)();
     if (!range || typeof range !== 'object') return false;
     const r = range as Record<string, unknown>;
     if (
       typeof r['setStart'] !== 'function' ||
       typeof r['compareBoundaryPoints'] !== 'function' ||
-      typeof r['cloneRange'] !== 'function'
+      typeof r['cloneRange'] !== 'function' ||
+      typeof r['selectNodeContents'] !== 'function'
     ) {
       return false;
     }
-    const el = (d['createElement'] as (tag: string) => unknown)('div');
-    if (!el || typeof el !== 'object') return false;
-    const e = el as Record<string, unknown>;
-    if (e['nodeType'] !== 1) return false;
+    (r['selectNodeContents'] as (node: unknown) => unknown)(el);
+    if (r['startContainer'] !== el || r['commonAncestorContainer'] !== el) return false;
+
+    const walker = (d['createTreeWalker'] as (root: unknown, whatToShow?: number) => unknown)(
+      el,
+      4,
+    );
+    if (!walker || typeof walker !== 'object') return false;
+    const w = walker as Record<string, unknown>;
+    if (w['root'] !== el || (w['nextNode'] as () => unknown)() !== textNode) return false;
   } catch {
     return false;
   }
@@ -610,6 +631,7 @@ export class ChapterMoodAnalyzer {
     const rejectionReasons: string[] = [];
 
     // Filter valid blocks matching spine and anchor provenance
+    const suppliedIds = new Set<string>();
     for (let idx = 0; idx < rawBlocks.length; idx++) {
       const b = rawBlocks[idx]!;
       const check = isBlockValid(b, spinePrefix, input.chapterDocument);
@@ -617,6 +639,14 @@ export class ChapterMoodAnalyzer {
         rejectedCount++;
         rejectionReasons.push(`Block[${idx}] ${check.reason}`);
         continue;
+      }
+      if (b.id !== undefined) {
+        if (suppliedIds.has(b.id)) {
+          rejectedCount++;
+          rejectionReasons.push(`Block[${idx}] Duplicate block id '${b.id}' supplied`);
+          continue;
+        }
+        suppliedIds.add(b.id);
       }
       const id = b.id ?? `blk-${idx}-${b.startCfi}`;
       candidateBlocks.push({ block: b, id });
@@ -662,7 +692,7 @@ export class ChapterMoodAnalyzer {
     // Sort candidate blocks deterministically using canonical CFI comparison (fail-closed)
     try {
       candidateBlocks.sort((a, b) => {
-        if (a.id === b.id) return 0;
+        if (a === b) return 0;
         const cmpStart = compareCanonicalCfi(a.block.startCfi, b.block.startCfi);
         if (cmpStart === null) {
           throw new Error(`Canonical CFI start sort comparison failed between ${a.id} and ${b.id}`);
@@ -673,6 +703,7 @@ export class ChapterMoodAnalyzer {
           throw new Error(`Canonical CFI end sort comparison failed between ${a.id} and ${b.id}`);
         }
         if (cmpEnd !== 0) return cmpEnd;
+        if (a.id === b.id) return 0;
         return a.id.localeCompare(b.id);
       });
     } catch (err) {
