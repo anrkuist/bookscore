@@ -160,6 +160,15 @@ export function getCfiSpinePrefix(cfi: string | null | undefined): string | null
   const match = cfi.match(/^epubcfi\((.+)\)$/);
   if (!match) return null;
   const inner = match[1]!;
-  const bang = inner.indexOf('!');
+  let bang = -1;
+  for (let index = 0; index < inner.length; index++) {
+    if (inner[index] !== '!') continue;
+    let escapes = 0;
+    for (let cursor = index - 1; cursor >= 0 && inner[cursor] === '^'; cursor--) escapes++;
+    if (escapes % 2 === 0) {
+      bang = index;
+      break;
+    }
+  }
   return bang === -1 ? inner : inner.slice(0, bang);
 }
